@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>重复文件查找器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="panel">
+          <h1 id="appTitle">重复文件查找器</h1>
+          <p class="muted">
+            选择多个目录后，先按文件大小和扩展名预筛，再用 SHA-256 校验内容，找出完全相同的文件。
+          </p>
+
+          <div class="actions">
+            <button id="selectDirectoriesButton" class="button button-primary">选择目录</button>
+            <button id="scanButton" class="button button-secondary" disabled>开始扫描</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>已选目录</h2>
+            <div class="panel-header-actions">
+              <span id="directoryCount" class="tag">0 个</span>
+              <button id="clearButton" class="button button-ghost" disabled>清空列表</button>
+            </div>
+          </div>
+          <ul id="directoryList" class="directory-list">
+            <li class="empty-state">还没有选择目录</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <h2>扫描说明</h2>
+          <ul class="tips">
+            <li>先用大小 + 类型初步筛选候选文件。</li>
+            <li>候选文件再计算内容哈希，只有完全一致才会归为重复。</li>
+            <li>符号链接会跳过，避免重复遍历或循环引用。</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="content">
+        <div class="panel summary-panel">
+          <div class="summary-header">
+            <div>
+              <h2>扫描结果</h2>
+              <p id="statusText" class="muted">请选择目录后开始扫描。</p>
+            </div>
+            <span id="scanState" class="scan-state idle">未扫描</span>
+          </div>
+
+          <div id="scanProgressSection" class="scan-progress-section is-hidden">
+            <div class="scan-progress-meta">
+              <span id="scanProgressStage">准备扫描</span>
+              <span id="scanProgressPercent">0%</span>
+            </div>
+            <div class="scan-progress-track">
+              <div id="scanProgressBar" class="scan-progress-bar"></div>
+            </div>
+            <div id="scanProgressDetail" class="scan-progress-detail">等待开始</div>
+          </div>
+
+          <div id="summaryGrid" class="summary-grid">
+            <div class="summary-card">
+              <span class="summary-label">扫描文件数</span>
+              <strong id="totalFilesValue">0</strong>
+            </div>
+            <div class="summary-card">
+              <span class="summary-label">待比对文件数</span>
+              <strong id="candidateFilesValue">0</strong>
+            </div>
+            <div class="summary-card">
+              <span class="summary-label">重复分组数</span>
+              <strong id="duplicateGroupsValue">0</strong>
+            </div>
+            <div class="summary-card">
+              <span class="summary-label">可释放空间</span>
+              <strong id="wastedSizeValue">0 B</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="result-toolbar">
+            <div class="panel-header">
+              <h2>重复文件列表</h2>
+              <span id="resultCount" class="tag">0 组</span>
+            </div>
+            <div class="toolbar-actions">
+              <button id="selectAllButton" class="button button-ghost" disabled>全选</button>
+              <button id="invertSelectButton" class="button button-ghost" disabled>反选</button>
+              <button id="autoSelectButton" class="button button-ghost" disabled>自动选择重复文件</button>
+              <button id="deleteButton" class="button button-danger" disabled>删除文件</button>
+              <span id="selectedCount" class="tag">已选 0 个</span>
+            </div>
+          </div>
+          <div class="result-filters">
+            <label class="filter-field" for="fileTypeFilter">
+              <span class="filter-label">文件类型</span>
+              <select id="fileTypeFilter" class="filter-select" disabled>
+                <option value="all">全部类型</option>
+                <option value="video">视频</option>
+                <option value="audio">音频</option>
+                <option value="image">图片</option>
+              </select>
+            </label>
+            <label class="filter-field" for="fileSizeFilter">
+              <span class="filter-label">文件大小</span>
+              <select id="fileSizeFilter" class="filter-select" disabled>
+                <option value="all">全部大小</option>
+                <option value="0-1">0-1M</option>
+                <option value="1-2">1-2M</option>
+                <option value="2-3">2-3M</option>
+                <option value="3-4">3-4M</option>
+                <option value="4-5">4-5M</option>
+                <option value="5+">5M以上</option>
+              </select>
+            </label>
+          </div>
+          <div id="results" class="results">
+            <div class="empty-state">扫描完成后会在这里展示重复文件分组。</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>未处理项</h2>
+            <span id="skippedCount" class="tag">0 项</span>
+          </div>
+          <div id="skippedList" class="skipped-list">
+            <div class="empty-state">目前没有未处理项。</div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div id="deleteProgressModal" class="progress-modal is-hidden" aria-hidden="true">
+      <div class="progress-modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteProgressTitle">
+        <div class="progress-modal-header">
+          <h2 id="deleteProgressTitle">正在删除文件</h2>
+          <span id="deleteProgressPercent" class="tag">0%</span>
+        </div>
+        <div class="scan-progress-track progress-modal-track">
+          <div id="deleteProgressBar" class="scan-progress-bar"></div>
+        </div>
+        <div id="deleteProgressStage" class="progress-modal-stage">准备删除文件</div>
+        <div id="deleteProgressDetail" class="progress-modal-detail">等待开始</div>
+      </div>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,39 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fileBackGradient" x1="92" y1="112" x2="348" y2="392" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#CFE2FF"/>
+      <stop offset="1" stop-color="#7FB0FF"/>
+    </linearGradient>
+    <linearGradient id="fileFrontGradient" x1="156" y1="58" x2="430" y2="352" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#DCEBFF"/>
+    </linearGradient>
+    <linearGradient id="accentGradient" x1="256" y1="248" x2="458" y2="450" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2F7BFF"/>
+      <stop offset="1" stop-color="#0D4FD6"/>
+    </linearGradient>
+    <filter id="softShadow" x="42" y="34" width="438" height="444" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="12"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.101961 0 0 0 0 0.247059 0 0 0 0 0.533333 0 0 0 0.12 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <path d="M92 154C92 131.909 109.909 114 132 114H279.274C289.883 114 300.058 118.214 307.559 125.715L360.285 178.441C367.786 185.942 372 196.117 372 206.726V370C372 392.091 354.091 410 332 410H132C109.909 410 92 392.091 92 370V154Z" fill="url(#fileBackGradient)"/>
+    <path d="M154 98C154 75.9086 171.909 58 194 58H323.628C334.106 58 344.171 62.1095 351.663 69.4475L412.035 128.591C420.007 136.399 424.5 147.089 424.5 158.247V338C424.5 360.091 406.591 378 384.5 378H194C171.909 378 154 360.091 154 338V98Z" fill="url(#fileFrontGradient)"/>
+    <path d="M328 58V124.311C328 138.779 339.727 150.506 354.195 150.506H424.5" stroke="#7CA9FF" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M142 212H282" stroke="#4D87E6" stroke-width="22" stroke-linecap="round"/>
+    <path d="M142 264H306" stroke="#4D87E6" stroke-width="22" stroke-linecap="round" opacity="0.94"/>
+    <path d="M234 164H280" stroke="#4D87E6" stroke-width="22" stroke-linecap="round" opacity="0.76"/>
+    <path d="M234 216H341" stroke="#94BBFF" stroke-width="22" stroke-linecap="round"/>
+    <path d="M234 268H338" stroke="#94BBFF" stroke-width="22" stroke-linecap="round" opacity="0.92"/>
+    <circle cx="332" cy="344" r="96" fill="white" stroke="url(#accentGradient)" stroke-width="28"/>
+    <path d="M400.589 412.589L458 470" stroke="url(#accentGradient)" stroke-width="34" stroke-linecap="round"/>
+    <path d="M283 345L317 379L383 313" stroke="url(#accentGradient)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
