@@ -1,39 +1,28 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="fileBackGradient" x1="92" y1="112" x2="348" y2="392" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#9CC4FF"/>
-      <stop offset="1" stop-color="#4F8FFF"/>
+    <linearGradient id="fileBackGradient" x1="64" y1="88" x2="282" y2="390" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BFD8FF"/>
+      <stop offset="1" stop-color="#78A8FF"/>
     </linearGradient>
-    <linearGradient id="fileFrontGradient" x1="156" y1="58" x2="430" y2="352" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#B6D3FF"/>
-      <stop offset="1" stop-color="#78A9FF"/>
+    <linearGradient id="fileFrontGradient" x1="156" y1="46" x2="428" y2="356" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FAFF"/>
+      <stop offset="1" stop-color="#D9E8FF"/>
     </linearGradient>
-    <linearGradient id="accentGradient" x1="256" y1="248" x2="458" y2="450" gradientUnits="userSpaceOnUse">
+    <linearGradient id="accentGradient" x1="244" y1="246" x2="470" y2="472" gradientUnits="userSpaceOnUse">
       <stop stop-color="#2F7BFF"/>
-      <stop offset="1" stop-color="#0D4FD6"/>
+      <stop offset="1" stop-color="#0A56E8"/>
     </linearGradient>
-    <filter id="softShadow" x="42" y="34" width="438" height="444" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
-      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
-      <feOffset dy="10"/>
-      <feGaussianBlur stdDeviation="12"/>
-      <feColorMatrix type="matrix" values="0 0 0 0 0.101961 0 0 0 0 0.247059 0 0 0 0 0.533333 0 0 0 0.12 0"/>
-      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
-      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
-    </filter>
   </defs>
 
-  <g filter="url(#softShadow)">
-    <path d="M92 154C92 131.909 109.909 114 132 114H279.274C289.883 114 300.058 118.214 307.559 125.715L360.285 178.441C367.786 185.942 372 196.117 372 206.726V370C372 392.091 354.091 410 332 410H132C109.909 410 92 392.091 92 370V154Z" fill="url(#fileBackGradient)"/>
-    <path d="M154 98C154 75.9086 171.909 58 194 58H323.628C334.106 58 344.171 62.1095 351.663 69.4475L412.035 128.591C420.007 136.399 424.5 147.089 424.5 158.247V338C424.5 360.091 406.591 378 384.5 378H194C171.909 378 154 360.091 154 338V98Z" fill="url(#fileFrontGradient)"/>
-    <path d="M328 58V124.311C328 138.779 339.727 150.506 354.195 150.506H424.5" stroke="#5C96FF" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M142 212H282" stroke="#3B79E6" stroke-width="22" stroke-linecap="round"/>
-    <path d="M142 264H306" stroke="#3B79E6" stroke-width="22" stroke-linecap="round" opacity="0.94"/>
-    <path d="M234 164H280" stroke="#3B79E6" stroke-width="22" stroke-linecap="round" opacity="0.76"/>
-    <path d="M234 216H341" stroke="#6D9FFF" stroke-width="22" stroke-linecap="round"/>
-    <path d="M234 268H338" stroke="#6D9FFF" stroke-width="22" stroke-linecap="round" opacity="0.92"/>
-    <circle cx="332" cy="344" r="96" fill="none" stroke="url(#accentGradient)" stroke-width="28"/>
-    <path d="M400.589 412.589L458 470" stroke="url(#accentGradient)" stroke-width="34" stroke-linecap="round"/>
-    <path d="M283 345L317 379L383 313" stroke="url(#accentGradient)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
-  </g>
+  <path d="M68 150.182C68 124.677 88.6771 104 114.182 104H246.227C258.11 104 269.506 108.721 277.91 117.125L318.875 158.09C327.279 166.494 332 177.89 332 189.773V337.818C332 363.323 311.323 384 285.818 384H114.182C88.677 384 68 363.323 68 337.818V150.182Z" fill="url(#fileBackGradient)"/>
+  <path d="M156 92.7733C156 67.5035 176.489 47 201.773 47H327.473C339.254 47 350.58 51.5534 359.048 59.6965L417.575 115.973C426.482 124.536 431.5 136.364 431.5 148.719V307.227C431.5 332.497 411.011 353 385.727 353H201.773C176.489 353 156 332.497 156 307.227V92.7733Z" fill="url(#fileFrontGradient)"/>
+  <path d="M326 47V109.198C326 121.24 335.76 131 347.802 131H431" fill="#7EABFF"/>
+
+  <path d="M214 161H295" stroke="#5B90EA" stroke-width="20" stroke-linecap="round"/>
+  <path d="M214 217H346" stroke="#5B90EA" stroke-width="20" stroke-linecap="round"/>
+  <path d="M214 273H324" stroke="#8EB6FF" stroke-width="20" stroke-linecap="round"/>
+
+  <circle cx="318" cy="336" r="96" fill="white"/>
+  <path d="M318 258C361.078 258 396 292.922 396 336C396 379.078 361.078 414 318 414C274.922 414 240 379.078 240 336C240 292.922 274.922 258 318 258ZM318 236C262.772 236 218 280.772 218 336C218 391.228 262.772 436 318 436C340.72 436 361.671 428.428 378.49 415.659L431.444 468.613C435.742 472.911 441.376 475.06 447.01 475.06C452.645 475.06 458.279 472.911 462.577 468.613C471.173 460.017 471.173 446.081 462.577 437.485L409.623 384.531C421.947 367.887 429 347.302 429 325C429 275.847 389.153 236 340 236H318Z" fill="url(#accentGradient)"/>
+  <path d="M279 337L307.5 365.5L361 312" stroke="url(#accentGradient)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
