@@ -140,7 +140,7 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 		emitProgress(Progress{
 			Percent: percent,
 			Stage:   "正在校验文件内容",
-			Detail:  file.Name,
+			Detail:  file.Directory,
 		})
 	}
 
@@ -163,7 +163,7 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 		}
 
 		sort.Slice(group, func(i, j int) bool {
-			return compareFilesByCreatedAt(group[i], group[j])
+			return compareFilesByModifiedAtDesc(group[i], group[j])
 		})
 
 		sample := group[0]
@@ -182,8 +182,8 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 	sort.Slice(groups, func(i, j int) bool {
 		left := groups[i].Files[0]
 		right := groups[j].Files[0]
-		if left.CreatedAtMs != right.CreatedAtMs {
-			return left.CreatedAtMs < right.CreatedAtMs
+		if left.ModifiedAtMs != right.ModifiedAtMs {
+			return left.ModifiedAtMs > right.ModifiedAtMs
 		}
 
 		return left.Path < right.Path
@@ -353,9 +353,9 @@ func fileKeyBySizeAndHash(file FileInfo) string {
 	return itoa64(file.Size) + "::" + file.Hash
 }
 
-func compareFilesByCreatedAt(left FileInfo, right FileInfo) bool {
-	if left.CreatedAtMs != right.CreatedAtMs {
-		return left.CreatedAtMs < right.CreatedAtMs
+func compareFilesByModifiedAtDesc(left FileInfo, right FileInfo) bool {
+	if left.ModifiedAtMs != right.ModifiedAtMs {
+		return left.ModifiedAtMs > right.ModifiedAtMs
 	}
 
 	return left.Path < right.Path
@@ -386,7 +386,7 @@ func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 			shouldEmit = true
 		} else if progress.Stage != lastStage {
 			shouldEmit = true
-		} else if progress.Percent != lastPercent {
+		} else if progress.Percent != lastPercent && now.Sub(lastEmittedAt) >= 250*time.Millisecond {
 			shouldEmit = true
 		} else if progress.Detail != lastDetail && now.Sub(lastEmittedAt) >= 200*time.Millisecond {
 			shouldEmit = true

@@ -150,7 +150,7 @@ func (app *DesktopApp) BridgeScript() string {
                                                                         return;
                                                                 }
 
-                                                                window.setTimeout(poll, 150);
+								window.setTimeout(poll, 250);
                                                         }).catch(function (error) {
                                                                 reject(error);
                                                         });
@@ -187,7 +187,7 @@ func (app *DesktopApp) BridgeScript() string {
                                                                         return;
                                                                 }
 
-                                                                window.setTimeout(poll, 150);
+								window.setTimeout(poll, 150);
                                                         }).catch(function (error) {
                                                                 reject(error);
                                                         });

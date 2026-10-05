@@ -127,13 +127,8 @@ async function initializeAppTitle() {
 async function handleSelectDirectories() {
   try {
     const selectedDirectories = await window.duplicateFinderAPI.selectDirectories();
-    if (!selectedDirectories || selectedDirectories.length === 0) {
-      return;
-    }
-
-    const directorySet = new Set([...state.directories, ...selectedDirectories]);
-    state.directories = [...directorySet].sort((left, right) => left.localeCompare(right));
-    render();
+    await waitForNextFrame();
+    addDirectories(selectedDirectories);
   } catch (error) {
     const message = (error && error.message) || '选择目录失败，请重试。';
     state.scanResult = {
@@ -186,6 +181,30 @@ function handleRemoveDirectory(directory) {
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
+  render();
+}
+
+function addDirectories(directories) {
+  if (!directories || directories.length === 0) {
+    return;
+  }
+
+  const directorySet = new Set(state.directories);
+  directories.forEach((directory) => {
+    if (directory && !directorySet.has(directory)) {
+      directorySet.add(directory);
+    }
+  });
+
+  state.directories = [...directorySet];
+  state.scanResult = null;
+  state.selectedFiles = new Set();
+  state.collapsedGroups = new Set();
+  state.scanProgress = {
+    percent: 0,
+    stage: '未扫描',
+    detail: '',
+  };
   render();
 }
 
@@ -951,4 +970,10 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
   return escapeHtml(value);
+}
+
+function waitForNextFrame() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
 }
