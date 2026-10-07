@@ -336,6 +336,12 @@ button {
   margin-bottom: 14px;
 }
 
+.progress-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .progress-modal-stage {
   margin-top: 12px;
   color: #20304d;
@@ -365,7 +371,18 @@ button {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 8px 0 10px;
   margin-bottom: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  box-shadow: none;
+}
+
+.result-toolbar.is-scrolled {
+  box-shadow: 0 8px 14px -14px rgba(18, 38, 63, 0.45);
 }
 
 .toolbar-actions {
@@ -419,9 +436,29 @@ button {
 }
 
 .results {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+  display: block;
+}
+
+.result-item {
+  min-width: 0;
+}
+
+.result-item-group {
+  padding-top: 10px;
+}
+
+.result-item-group:first-child {
+  padding-top: 0;
+}
+
+.result-item-file,
+.result-item-tip {
+  min-width: 0;
+}
+
+.result-virtual-spacer {
+  width: 100%;
+  pointer-events: none;
 }
 
 .result-group {
@@ -594,6 +631,15 @@ button {
 .support-item {
   min-width: 0;
   word-break: break-all;
+}
+
+.support-item-path {
+  flex: 0 0 100%;
+}
+
+.support-item-path-emphasis {
+  font-weight: 700;
+  color: #d97706;
 }
 
 .action-cell {

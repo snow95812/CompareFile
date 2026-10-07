@@ -29,10 +29,13 @@ func main() {
 	mustBind(window, "selectDirectories", app.SelectDirectories)
 	mustBind(window, "startScanDirectories", app.StartScanDirectories)
 	mustBind(window, "getScanStatus", app.GetScanStatus)
+	mustBind(window, "cancelScan", app.CancelScan)
 	mustBind(window, "startDeleteFiles", app.StartDeleteFiles)
 	mustBind(window, "getDeleteStatus", app.GetDeleteStatus)
+	mustBind(window, "cancelDelete", app.CancelDelete)
 	mustBind(window, "revealFile", app.RevealFile)
 	mustBind(window, "previewFile", app.PreviewFile)
+	mustBind(window, "clearThumbnailCache", app.ClearThumbnailCache)
 
 	window.SetTitle(appName + " v" + appVersion)
 	window.SetSize(980, 720, webview.HintMin)

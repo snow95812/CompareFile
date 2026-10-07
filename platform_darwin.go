@@ -22,12 +22,22 @@ func (app *DesktopApp) SelectDirectories() ([]string, error) {
 		return outputText
 	`
 
-	output, err := exec.Command("osascript", "-e", script).Output()
+	output, err := exec.Command("osascript", "-e", script).CombinedOutput()
 	if err != nil {
+		outputText := strings.TrimSpace(string(output))
+		lowerError := strings.ToLower(err.Error() + "\n" + outputText)
+		if strings.Contains(lowerError, "canceled") || strings.Contains(lowerError, "cancelled") || strings.Contains(outputText, "取消") {
+			return nil, nil
+		}
 		return nil, err
 	}
 
-	return splitOutputLines(output), nil
+	directories := splitOutputLines(output)
+	if len(directories) == 0 {
+		return nil, nil
+	}
+
+	return directories, nil
 }
 
 func (app *DesktopApp) RevealFile(filePath string) (bool, error) {
@@ -35,7 +45,12 @@ func (app *DesktopApp) RevealFile(filePath string) (bool, error) {
 		return false, errors.New("缺少文件路径。")
 	}
 
-	command := exec.Command("open", "-R", filePath)
+	absolutePath, err := filepath.Abs(filepath.Clean(filepath.FromSlash(filePath)))
+	if err != nil {
+		return false, err
+	}
+
+	command := exec.Command("open", "-R", absolutePath)
 	if err := command.Run(); err != nil {
 		return false, err
 	}
@@ -48,7 +63,12 @@ func (app *DesktopApp) PreviewFile(filePath string) (bool, error) {
 		return false, errors.New("缺少文件路径。")
 	}
 
-	command := exec.Command("qlmanage", "-p", filePath)
+	absolutePath, err := filepath.Abs(filepath.Clean(filepath.FromSlash(filePath)))
+	if err != nil {
+		return false, err
+	}
+
+	command := exec.Command("qlmanage", "-p", absolutePath)
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -62,12 +82,42 @@ func (app *DesktopApp) PreviewFile(filePath string) (bool, error) {
 }
 
 func moveFileToTrash(filePath string) error {
-	absolutePath, err := filepath.Abs(filepath.Clean(filePath))
-	if err != nil {
-		return err
+	return moveFilesToTrash([]string{filePath})
+}
+
+func moveFilesToTrash(filePaths []string) error {
+	if len(filePaths) == 0 {
+		return nil
 	}
 
-	script := `tell application "Finder" to delete (POSIX file ` + strconv.Quote(absolutePath) + `)`
+	normalizedPaths := make([]string, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		if strings.TrimSpace(filePath) == "" {
+			continue
+		}
+
+		absolutePath, err := filepath.Abs(filepath.Clean(filepath.FromSlash(filePath)))
+		if err != nil {
+			return err
+		}
+		normalizedPaths = append(normalizedPaths, absolutePath)
+	}
+
+	if len(normalizedPaths) == 0 {
+		return nil
+	}
+
+	appleScriptItems := make([]string, 0, len(normalizedPaths))
+	for _, absolutePath := range normalizedPaths {
+		appleScriptItems = append(appleScriptItems, `POSIX file `+strconv.Quote(absolutePath))
+	}
+
+	script := `
+		set fileItems to {` + strings.Join(appleScriptItems, ", ") + `}
+		tell application "Finder"
+			delete fileItems
+		end tell
+	`
 	command := exec.Command("osascript", "-e", script)
 	if output, runErr := command.CombinedOutput(); runErr != nil {
 		message := strings.TrimSpace(string(output))

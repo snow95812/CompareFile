@@ -4,44 +4,40 @@ package main
 
 import (
 	"errors"
-	"os/exec"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"unsafe"
+
+	winfilepicker "github.com/zyoung11/GO-WinFilePicker"
 )
 
 func (app *DesktopApp) SelectDirectories() ([]string, error) {
-	script := `
-Add-Type -AssemblyName System.Windows.Forms | Out-Null
-$selected = New-Object System.Collections.Generic.List[string]
-while ($true) {
-  $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dialog.Description = "选择要扫描的目录"
-  $dialog.ShowNewFolderButton = $false
-  if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-    break
-  }
-  if (-not [string]::IsNullOrWhiteSpace($dialog.SelectedPath) -and -not $selected.Contains($dialog.SelectedPath)) {
-    $selected.Add($dialog.SelectedPath) | Out-Null
-  }
-  $continue = [System.Windows.Forms.MessageBox]::Show(
-    "是否继续选择其他目录？",
-    "重复文件查找器",
-    [System.Windows.Forms.MessageBoxButtons]::YesNo,
-    [System.Windows.Forms.MessageBoxIcon]::Question
-  )
-  if ($continue -ne [System.Windows.Forms.DialogResult]::Yes) {
-    break
-  }
-}
-[string]::Join([Environment]::NewLine, $selected)
-`
-
-	output, err := exec.Command("powershell", "-NoProfile", "-STA", "-Command", script).Output()
+	selectedPaths, err := winfilepicker.SelectFolders("选择要扫描的目录")
 	if err != nil {
+		lowerError := strings.ToLower(err.Error())
+		if strings.Contains(lowerError, "canceled") || strings.Contains(lowerError, "cancelled") || strings.Contains(err.Error(), "取消") {
+			return nil, nil
+		}
 		return nil, err
 	}
 
-	return splitOutputLines(output), nil
+	directories := make([]string, 0, len(selectedPaths))
+	for _, selectedPath := range selectedPaths {
+		selectedPath = strings.TrimSpace(selectedPath)
+		if selectedPath == "" {
+			continue
+		}
+		directories = append(directories, selectedPath)
+	}
+
+	if len(directories) == 0 {
+		return nil, nil
+	}
+
+	return directories, nil
 }
 
 func (app *DesktopApp) RevealFile(filePath string) (bool, error) {
@@ -49,8 +45,17 @@ func (app *DesktopApp) RevealFile(filePath string) (bool, error) {
 		return false, errors.New("缺少文件路径。")
 	}
 
-	command := exec.Command("explorer.exe", "/select,"+filePath)
-	if err := command.Run(); err != nil {
+	absolutePath, err := filepath.Abs(filepath.Clean(filepath.FromSlash(filePath)))
+	if err != nil {
+		return false, err
+	}
+
+	targetPath := absolutePath
+	if info, statErr := os.Stat(absolutePath); statErr == nil && !info.IsDir() {
+		targetPath = filepath.Dir(absolutePath)
+	}
+
+	if err := shellOpen(targetPath); err != nil {
 		return false, err
 	}
 
@@ -62,43 +67,117 @@ func (app *DesktopApp) PreviewFile(filePath string) (bool, error) {
 		return false, errors.New("缺少文件路径。")
 	}
 
-	command := exec.Command("powershell", "-NoProfile", "-Command", "Start-Process -FilePath '"+escapePowerShellSingleQuoted(filePath)+"'")
-	if err := command.Start(); err != nil {
+	if err := shellOpen(filePath); err != nil {
 		return false, err
 	}
 
-	_ = command.Process.Release()
 	return true, nil
 }
 
 func moveFileToTrash(filePath string) error {
-	absolutePath, err := filepath.Abs(filepath.Clean(filePath))
-	if err != nil {
-		return err
+	return moveFilesToTrash([]string{filePath})
+}
+
+func moveFilesToTrash(filePaths []string) error {
+	if len(filePaths) == 0 {
+		return nil
 	}
 
-	script := `
-Add-Type -AssemblyName Microsoft.VisualBasic | Out-Null
-[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
-  '` + escapePowerShellSingleQuoted(absolutePath) + `',
-  [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
-  [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin
-)
-`
-
-	command := exec.Command("powershell", "-NoProfile", "-Command", script)
-	if output, runErr := command.CombinedOutput(); runErr != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			return runErr
+	pathUTF16 := make([]uint16, 0, len(filePaths)*260)
+	validPathCount := 0
+	for _, filePath := range filePaths {
+		if strings.TrimSpace(filePath) == "" {
+			continue
 		}
 
-		return errors.New(message)
+		absolutePath, err := filepath.Abs(filepath.Clean(filePath))
+		if err != nil {
+			return err
+		}
+
+		encodedPath, err := syscall.UTF16FromString(absolutePath)
+		if err != nil {
+			return err
+		}
+
+		pathUTF16 = append(pathUTF16, encodedPath...)
+		validPathCount += 1
+	}
+	if validPathCount == 0 {
+		return nil
+	}
+	pathUTF16 = append(pathUTF16, 0)
+
+	fileOp := shFileOpStruct{
+		wFunc:  foDelete,
+		pFrom:  &pathUTF16[0],
+		fFlags: fofAllowUndo | fofNoConfirmation | fofSilent | fofNoErrorUI,
+	}
+
+	result, _, callErr := shell32SHFileOperationW.Call(uintptr(unsafe.Pointer(&fileOp)))
+	if result != 0 {
+		if callErr != syscall.Errno(0) {
+			return callErr
+		}
+		return fmt.Errorf("移动到回收站失败，错误代码：%d", result)
+	}
+	if fileOp.fAnyOperationsAborted != 0 {
+		return errors.New("移动到回收站已取消。")
 	}
 
 	return nil
 }
 
-func escapePowerShellSingleQuoted(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
+func shellOpen(filePath string) error {
+	operation, err := syscall.UTF16PtrFromString("open")
+	if err != nil {
+		return err
+	}
+	target, err := syscall.UTF16PtrFromString(filePath)
+	if err != nil {
+		return err
+	}
+
+	result, _, callErr := shell32ShellExecuteW.Call(
+		0,
+		uintptr(unsafe.Pointer(operation)),
+		uintptr(unsafe.Pointer(target)),
+		0,
+		0,
+		swShowDefault,
+	)
+	if result <= 32 {
+		if callErr != syscall.Errno(0) {
+			return callErr
+		}
+		return fmt.Errorf("打开文件失败，错误代码：%d", result)
+	}
+
+	return nil
 }
+
+const (
+	foDelete          = 0x0003
+	fofSilent         = 0x0004
+	fofNoConfirmation = 0x0010
+	fofAllowUndo      = 0x0040
+	fofNoErrorUI      = 0x0400
+	swShowDefault     = 10
+)
+
+type shFileOpStruct struct {
+	hwnd                  uintptr
+	wFunc                 uint32
+	pFrom                 *uint16
+	pTo                   *uint16
+	fFlags                uint16
+	fAnyOperationsAborted int32
+	hNameMappings         uintptr
+	lpszProgressTitle     *uint16
+}
+
+var (
+	shell32DLL              = syscall.NewLazyDLL("shell32.dll")
+	shell32SHFileOperationW = shell32DLL.NewProc("SHFileOperationW")
+	shell32ShellExecuteW    = shell32DLL.NewProc("ShellExecuteW")
+)

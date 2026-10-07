@@ -1,8 +1,10 @@
 package scanner
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +16,8 @@ import (
 
 type Progress struct {
 	Percent int    `json:"percent"`
+	Current int    `json:"current,omitempty"`
+	Total   int    `json:"total,omitempty"`
 	Stage   string `json:"stage"`
 	Detail  string `json:"detail"`
 }
@@ -67,6 +71,10 @@ type ScanResult struct {
 type ProgressFunc func(Progress)
 
 func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult, error) {
+	return ScanDirectoriesWithContext(context.Background(), directories, onProgress)
+}
+
+func ScanDirectoriesWithContext(ctx context.Context, directories []string, onProgress ProgressFunc) (ScanResult, error) {
 	normalizedDirectories := uniqueDirectories(directories)
 	files := make([]FileInfo, 0)
 	skipped := make([]SkippedItem, 0)
@@ -78,7 +86,15 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 		Detail:  "共 " + itoa(len(normalizedDirectories)) + " 个目录",
 	})
 
+	if err := checkCancelled(ctx); err != nil {
+		return ScanResult{}, err
+	}
+
 	for index, rootDirectory := range normalizedDirectories {
+		if err := checkCancelled(ctx); err != nil {
+			return ScanResult{}, err
+		}
+
 		percent := 0
 		if len(normalizedDirectories) > 0 {
 			percent = int(float64(index) / float64(len(normalizedDirectories)) * 45)
@@ -90,7 +106,9 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 			Detail:  rootDirectory,
 		})
 
-		walkDirectory(rootDirectory, rootDirectory, &files, &skipped)
+		if err := walkDirectory(ctx, rootDirectory, rootDirectory, &files, &skipped); err != nil {
+			return ScanResult{}, err
+		}
 	}
 
 	emitProgress(Progress{
@@ -99,9 +117,17 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 		Detail:  "已扫描 " + itoa(len(files)) + " 个文件",
 	})
 
+	if err := checkCancelled(ctx); err != nil {
+		return ScanResult{}, err
+	}
+
 	candidateMap := make(map[string][]FileInfo)
 	candidateFiles := make([]FileInfo, 0)
 	for _, file := range files {
+		if err := checkCancelled(ctx); err != nil {
+			return ScanResult{}, err
+		}
+
 		key := fileKeyBySizeAndExtension(file)
 		candidateMap[key] = append(candidateMap[key], file)
 	}
@@ -120,8 +146,16 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 
 	hashedFiles := make([]FileInfo, 0, len(candidateFiles))
 	for index, file := range candidateFiles {
-		hash, err := hashFile(file.Path)
+		if err := checkCancelled(ctx); err != nil {
+			return ScanResult{}, err
+		}
+
+		hash, err := hashFileWithContext(ctx, file.Path)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return ScanResult{}, err
+			}
+
 			skipped = append(skipped, SkippedItem{
 				Path:   file.Path,
 				Reason: "无法读取文件内容：" + err.Error(),
@@ -144,6 +178,10 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 		})
 	}
 
+	if err := checkCancelled(ctx); err != nil {
+		return ScanResult{}, err
+	}
+
 	emitProgress(Progress{
 		Percent: 92,
 		Stage:   "正在整理重复结果",
@@ -158,6 +196,10 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 
 	groups := make([]DuplicateGroup, 0)
 	for _, group := range exactMap {
+		if err := checkCancelled(ctx); err != nil {
+			return ScanResult{}, err
+		}
+
 		if len(group) < 2 {
 			continue
 		}
@@ -216,17 +258,25 @@ func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult,
 	}, nil
 }
 
-func walkDirectory(directory string, rootDirectory string, files *[]FileInfo, skipped *[]SkippedItem) {
+func walkDirectory(ctx context.Context, directory string, rootDirectory string, files *[]FileInfo, skipped *[]SkippedItem) error {
+	if err := checkCancelled(ctx); err != nil {
+		return err
+	}
+
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		*skipped = append(*skipped, SkippedItem{
 			Path:   directory,
 			Reason: "无法读取目录：" + err.Error(),
 		})
-		return
+		return nil
 	}
 
 	for _, entry := range entries {
+		if err := checkCancelled(ctx); err != nil {
+			return err
+		}
+
 		fullPath := filepath.Join(directory, entry.Name())
 
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -238,7 +288,9 @@ func walkDirectory(directory string, rootDirectory string, files *[]FileInfo, sk
 		}
 
 		if entry.IsDir() {
-			walkDirectory(fullPath, rootDirectory, files, skipped)
+			if err := walkDirectory(ctx, fullPath, rootDirectory, files, skipped); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -275,6 +327,8 @@ func walkDirectory(directory string, rootDirectory string, files *[]FileInfo, sk
 			ModifiedAtMs:  info.ModTime().UnixMilli(),
 		})
 	}
+
+	return nil
 }
 
 func uniqueDirectories(directories []string) []string {
@@ -330,7 +384,7 @@ func normalizeExtension(fileName string) string {
 	return extension
 }
 
-func hashFile(filePath string) (string, error) {
+func hashFileWithContext(ctx context.Context, filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
@@ -338,8 +392,25 @@ func hashFile(filePath string) (string, error) {
 	defer file.Close()
 
 	hash := sha256.New()
-	if _, err = io.Copy(hash, file); err != nil {
-		return "", err
+	buffer := make([]byte, 1024*1024)
+	for {
+		if err := checkCancelled(ctx); err != nil {
+			return "", err
+		}
+
+		bytesRead, readErr := file.Read(buffer)
+		if bytesRead > 0 {
+			if _, writeErr := hash.Write(buffer[:bytesRead]); writeErr != nil {
+				return "", writeErr
+			}
+		}
+
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
 	}
 
 	return hex.EncodeToString(hash.Sum(nil)), nil
@@ -401,6 +472,19 @@ func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 		lastDetail = progress.Detail
 		lastEmittedAt = now
 		onProgress(progress)
+	}
+}
+
+func checkCancelled(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
 	}
 }
 

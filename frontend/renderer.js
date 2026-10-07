@@ -2,7 +2,9 @@ const state = {
   directories: [],
   scanResult: null,
   isScanning: false,
+  isCancellingScan: false,
   isDeleting: false,
+  isCancellingDelete: false,
   selectedFiles: new Set(),
   collapsedGroups: new Set(),
   filters: {
@@ -16,8 +18,20 @@ const state = {
   },
   deleteProgress: {
     percent: 0,
+    current: 0,
+    total: 0,
     stage: '未删除',
     detail: '',
+  },
+  thumbnailVersion: 0,
+  resultView: {
+    revision: 0,
+    filteredGroupsRevision: -1,
+    filteredGroups: [],
+    flatItemsRevision: -1,
+    flatItems: [],
+    heightCache: new Map(),
+    renderFrameId: 0,
   },
 };
 
@@ -25,10 +39,12 @@ const elements = {
   appTitle: document.getElementById('appTitle'),
   selectDirectoriesButton: document.getElementById('selectDirectoriesButton'),
   scanButton: document.getElementById('scanButton'),
+  cancelScanButton: document.getElementById('cancelScanButton'),
   clearButton: document.getElementById('clearButton'),
   selectAllButton: document.getElementById('selectAllButton'),
   invertSelectButton: document.getElementById('invertSelectButton'),
   autoSelectButton: document.getElementById('autoSelectButton'),
+  clearThumbnailCacheButton: document.getElementById('clearThumbnailCacheButton'),
   deleteButton: document.getElementById('deleteButton'),
   fileTypeFilter: document.getElementById('fileTypeFilter'),
   fileSizeFilter: document.getElementById('fileSizeFilter'),
@@ -42,7 +58,9 @@ const elements = {
   scanProgressBar: document.getElementById('scanProgressBar'),
   scanProgressDetail: document.getElementById('scanProgressDetail'),
   deleteProgressModal: document.getElementById('deleteProgressModal'),
+  cancelDeleteButton: document.getElementById('cancelDeleteButton'),
   deleteProgressStage: document.getElementById('deleteProgressStage'),
+  deleteProgressCount: document.getElementById('deleteProgressCount'),
   deleteProgressPercent: document.getElementById('deleteProgressPercent'),
   deleteProgressBar: document.getElementById('deleteProgressBar'),
   deleteProgressDetail: document.getElementById('deleteProgressDetail'),
@@ -53,21 +71,38 @@ const elements = {
   resultCount: document.getElementById('resultCount'),
   selectedCount: document.getElementById('selectedCount'),
   results: document.getElementById('results'),
+  resultToolbar: document.querySelector('.result-toolbar'),
   skippedCount: document.getElementById('skippedCount'),
   skippedList: document.getElementById('skippedList'),
+  content: document.querySelector('.content'),
+};
+
+const RESULT_VIRTUALIZATION_THRESHOLD = 180;
+const RESULT_VIRTUALIZATION_OVERSCAN = 720;
+const RESULT_ITEM_ESTIMATED_HEIGHTS = {
+  group: 44,
+  file: 86,
+  tip: 30,
 };
 
 elements.selectDirectoriesButton.addEventListener('click', handleSelectDirectories);
 elements.scanButton.addEventListener('click', handleScan);
+elements.cancelScanButton.addEventListener('click', handleCancelScan);
 elements.clearButton.addEventListener('click', handleClearDirectories);
 elements.selectAllButton.addEventListener('click', handleSelectAllFiles);
 elements.invertSelectButton.addEventListener('click', handleInvertSelectedFiles);
 elements.autoSelectButton.addEventListener('click', handleAutoSelectDuplicates);
+elements.clearThumbnailCacheButton.addEventListener('click', handleClearThumbnailCache);
 elements.deleteButton.addEventListener('click', handleDeleteSelectedFiles);
+elements.cancelDeleteButton.addEventListener('click', handleCancelDelete);
 elements.fileTypeFilter.addEventListener('change', handleFilterChange);
 elements.fileSizeFilter.addEventListener('change', handleFilterChange);
 elements.results.addEventListener('change', handleResultsChange);
 elements.results.addEventListener('click', handleResultsClick);
+if (elements.content) {
+  elements.content.addEventListener('scroll', handleResultsViewportChange, { passive: true });
+}
+window.addEventListener('resize', handleResultsViewportChange);
 
 if (
   window.duplicateFinderAPI &&
@@ -90,6 +125,8 @@ if (
   window.duplicateFinderAPI.onDeleteProgress((progress) => {
     state.deleteProgress = {
       percent: progress.percent || 0,
+      current: progress.current || 0,
+      total: progress.total || 0,
       stage: progress.stage || '处理中',
       detail: progress.detail || '',
     };
@@ -99,6 +136,7 @@ if (
 
 initializeAppTitle();
 render();
+updateResultToolbarShadow();
 
 async function initializeAppTitle() {
   try {
@@ -146,9 +184,11 @@ async function handleScan() {
   }
 
   state.isScanning = true;
+  state.isCancellingScan = false;
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
+  invalidateResultCaches({ clearHeights: true });
   state.scanProgress = {
     percent: 0,
     stage: '准备扫描目录',
@@ -158,13 +198,67 @@ async function handleScan() {
 
   try {
     state.scanResult = await window.duplicateFinderAPI.scanDirectories(state.directories);
+    invalidateResultCaches({ clearHeights: true });
   } catch (error) {
     state.scanResult = {
       error: error.message || '扫描失败，请稍后再试。',
     };
+    invalidateResultCaches({ clearHeights: true });
   } finally {
     state.isScanning = false;
+    state.isCancellingScan = false;
     render();
+  }
+}
+
+async function handleCancelScan() {
+  if (!state.isScanning || state.isCancellingScan) {
+    return;
+  }
+
+  state.isCancellingScan = true;
+  state.scanProgress = {
+    ...state.scanProgress,
+    stage: '正在中止扫描',
+    detail: state.scanProgress.detail || '等待当前文件处理结束',
+  };
+  render();
+
+  try {
+    await window.duplicateFinderAPI.cancelScan();
+  } catch (error) {
+    state.isCancellingScan = false;
+    state.scanResult = {
+      ...(state.scanResult || {}),
+      error: (error && error.message) || '中止扫描失败，请重试。',
+    };
+    render();
+  }
+}
+
+async function handleClearThumbnailCache() {
+  if (
+    state.isScanning ||
+    state.isDeleting ||
+    !window.duplicateFinderAPI ||
+    typeof window.duplicateFinderAPI.clearThumbnailCache !== 'function'
+  ) {
+    return;
+  }
+
+  elements.clearThumbnailCacheButton.disabled = true;
+
+  try {
+    const message = await window.duplicateFinderAPI.clearThumbnailCache();
+    state.thumbnailVersion += 1;
+    render();
+    if (message) {
+      window.alert(message);
+    }
+  } catch (error) {
+    window.alert((error && error.message) || '清除缩略图缓存失败，请重试。');
+  } finally {
+    elements.clearThumbnailCacheButton.disabled = state.isScanning || state.isDeleting;
   }
 }
 
@@ -173,6 +267,7 @@ function handleClearDirectories() {
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
+  invalidateResultCaches({ clearHeights: true });
   render();
 }
 
@@ -181,6 +276,7 @@ function handleRemoveDirectory(directory) {
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
+  invalidateResultCaches({ clearHeights: true });
   render();
 }
 
@@ -200,6 +296,7 @@ function addDirectories(directories) {
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
+  invalidateResultCaches({ clearHeights: true });
   state.scanProgress = {
     percent: 0,
     stage: '未扫描',
@@ -272,8 +369,11 @@ async function handleDeleteSelectedFiles() {
   }
 
   state.isDeleting = true;
+  state.isCancellingDelete = false;
   state.deleteProgress = {
     percent: 0,
+    current: 0,
+    total: selectedPaths.length,
     stage: '准备删除文件',
     detail: `共 ${selectedPaths.length} 个文件`,
   };
@@ -284,26 +384,42 @@ async function handleDeleteSelectedFiles() {
     const currentGroups = state.scanResult && state.scanResult.groups ? state.scanResult.groups : [];
     const currentSummary = state.scanResult && state.scanResult.summary ? state.scanResult.summary : null;
     const currentSkipped = state.scanResult && state.scanResult.skipped ? state.scanResult.skipped : [];
+    const groups = filterDeletedFilesFromGroups(currentGroups, result.deleted || []);
+    const failedItems = result.failed || [];
+    const deletedCount = (result.deleted || []).length;
+    const failedCount = failedItems.length;
+    const isCancelled = Boolean(result.cancelled);
+    let message = '';
 
-    if (result.failed.length > 0) {
-      const groups = filterDeletedFilesFromGroups(currentGroups, result.deleted);
+    if (isCancelled && failedCount > 0) {
+      message = `已删除 ${deletedCount} 个文件，${failedCount} 个删除失败，剩余操作已取消。`;
+    } else if (isCancelled && deletedCount > 0) {
+      message = `已删除 ${deletedCount} 个文件，剩余操作已取消。`;
+    } else if (isCancelled) {
+      message = '已取消删除操作。';
+    } else if (failedCount > 0) {
+      message = `已删除 ${deletedCount} 个文件，${failedCount} 个删除失败。`;
+    }
+
+    if (message) {
       state.scanResult = {
         ...(state.scanResult || {}),
-        error: `已删除 ${result.deleted.length} 个文件，${result.failed.length} 个删除失败。`,
+        error: message,
         groups,
-        summary: buildSummaryFromGroups(currentSummary, groups, result.deleted.length),
+        summary: buildSummaryFromGroups(currentSummary, groups, deletedCount),
         skipped: [
           ...currentSkipped,
-          ...result.failed,
+          ...failedItems,
         ],
       };
+      invalidateResultCaches({ clearHeights: true });
     } else {
-      const groups = filterDeletedFilesFromGroups(currentGroups, result.deleted);
       state.scanResult = {
         ...(state.scanResult || {}),
         groups,
-        summary: buildSummaryFromGroups(currentSummary, groups, result.deleted.length),
+        summary: buildSummaryFromGroups(currentSummary, groups, deletedCount),
       };
+      invalidateResultCaches({ clearHeights: true });
     }
 
     state.selectedFiles = new Set();
@@ -312,8 +428,35 @@ async function handleDeleteSelectedFiles() {
       ...(state.scanResult || {}),
       error: error.message || '删除失败，请稍后再试。',
     };
+    invalidateResultCaches({ clearHeights: true });
   } finally {
     state.isDeleting = false;
+    state.isCancellingDelete = false;
+    render();
+  }
+}
+
+async function handleCancelDelete() {
+  if (!state.isDeleting || state.isCancellingDelete) {
+    return;
+  }
+
+  state.isCancellingDelete = true;
+  state.deleteProgress = {
+    ...state.deleteProgress,
+    stage: '正在中止删除',
+    detail: state.deleteProgress.detail || '等待当前批次处理结束',
+  };
+  render();
+
+  try {
+    await window.duplicateFinderAPI.cancelDelete();
+  } catch (error) {
+    state.isCancellingDelete = false;
+    state.scanResult = {
+      ...(state.scanResult || {}),
+      error: (error && error.message) || '取消删除失败，请重试。',
+    };
     render();
   }
 }
@@ -323,6 +466,7 @@ function handleFilterChange() {
     fileType: elements.fileTypeFilter.value,
     fileSize: elements.fileSizeFilter.value,
   };
+  invalidateResultCaches();
   syncSelectedFilesToVisibleGroups();
   render();
 }
@@ -375,14 +519,18 @@ function renderDirectoryList() {
 
 function renderScanState() {
   if (state.isScanning) {
-    elements.statusText.textContent = '正在扫描文件并计算重复结果，请稍候...';
+    elements.statusText.textContent = state.isCancellingScan
+      ? '正在中止扫描，请稍候...'
+      : '正在扫描文件并计算重复结果，请稍候...';
     elements.scanState.textContent = '处理中';
     elements.scanState.className = 'scan-state running';
     return;
   }
 
   if (state.isDeleting) {
-    elements.statusText.textContent = '正在删除已选文件，请稍候...';
+    elements.statusText.textContent = state.isCancellingDelete
+      ? '正在中止删除，请稍候...'
+      : '正在删除已选文件，请稍候...';
     elements.scanState.textContent = '处理中';
     elements.scanState.className = 'scan-state running';
     return;
@@ -426,14 +574,18 @@ function renderDeleteProgressModal() {
   if (!state.isDeleting) {
     elements.deleteProgressModal.classList.add('is-hidden');
     elements.deleteProgressModal.setAttribute('aria-hidden', 'true');
+    elements.deleteProgressCount.textContent = '0/0';
     elements.deleteProgressBar.style.width = '0%';
     return;
   }
 
   const percent = Math.max(0, Math.min(100, state.deleteProgress.percent || 0));
+  const current = Math.max(0, state.deleteProgress.current || 0);
+  const total = Math.max(current, state.deleteProgress.total || 0);
   elements.deleteProgressModal.classList.remove('is-hidden');
   elements.deleteProgressModal.setAttribute('aria-hidden', 'false');
   elements.deleteProgressStage.textContent = state.deleteProgress.stage || '正在删除文件';
+  elements.deleteProgressCount.textContent = `${current}/${total}`;
   elements.deleteProgressPercent.textContent = `${percent}%`;
   elements.deleteProgressBar.style.width = `${percent}%`;
   elements.deleteProgressDetail.textContent = state.deleteProgress.detail || '正在删除，请稍候...';
@@ -450,6 +602,7 @@ function renderSummary() {
 
 function renderResults() {
   const groups = getFilteredGroups();
+  const items = getFlatResultItems();
   elements.resultCount.textContent = `${groups.length} 组`;
   elements.selectedCount.textContent = `已选 ${state.selectedFiles.size} 个`;
   elements.fileTypeFilter.value = state.filters.fileType;
@@ -470,61 +623,15 @@ function renderResults() {
     return;
   }
 
-  if (groups.length === 0) {
+  if (items.length === 0) {
     elements.results.innerHTML = state.scanResult && state.scanResult.groups && state.scanResult.groups.length
       ? '<div class="empty-state">当前筛选条件下没有匹配结果。</div>'
       : '<div class="empty-state">当前没有找到完全相同的文件。</div>';
     return;
   }
 
-  elements.results.innerHTML = groups
-    .map(
-      (group, index) => `
-        <section class="result-group">
-          <div class="result-group-title">
-            <div class="group-title-main">
-              <button
-                class="group-collapse-button"
-                type="button"
-                data-group-id="${escapeAttribute(group.id)}"
-                title="${state.collapsedGroups.has(group.id) ? '展开当前分组' : '收起当前分组'}"
-                aria-label="${state.collapsedGroups.has(group.id) ? '展开当前分组' : '收起当前分组'}"
-              >
-                <svg
-                  class="${state.collapsedGroups.has(group.id) ? 'is-collapsed' : ''}"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <label class="group-checkbox-label" title="选择当前这一组的全部文件">
-                <input
-                  class="group-checkbox"
-                  type="checkbox"
-                  data-group-id="${escapeAttribute(group.id)}"
-                  ${getGroupSelectionState(group).checked ? 'checked' : ''}
-                />
-              </label>
-              <h3>第 ${index + 1} 组重复文件</h3>
-            </div>
-            <span class="tag">${formatNumber(group.fileCount)} 个文件</span>
-          </div>
-          ${state.collapsedGroups.has(group.id)
-            ? `
-                ${group.files[0] ? renderFileRow(group.files[0], false) : ''}
-                <div class="group-collapsed-tip">
-                  已收起其余 ${Math.max(group.files.length - 1, 0)} 个重复文件，不影响已选文件。
-                </div>
-              `
-            : group.files
-                .map((file, fileIndex) => renderFileRow(file, fileIndex > 0))
-                .join('')}
-        </section>
-      `,
-    )
-    .join('');
+  const virtualState = getVirtualizedResultState(items);
+  elements.results.innerHTML = renderVirtualizedResultItems(virtualState);
 
   elements.results.querySelectorAll('.group-checkbox').forEach((checkbox) => {
     const group = groups.find((item) => item.id === checkbox.dataset.groupId);
@@ -534,10 +641,18 @@ function renderResults() {
 
     checkbox.indeterminate = getGroupSelectionState(group).indeterminate;
   });
+
+  measureVisibleResultItems();
 }
 
-function renderFileRow(file, isDuplicate) {
+function renderFileRow(file, isDuplicate, options = {}) {
   const checked = state.selectedFiles.has(file.path);
+  const shouldEmphasizeDirectory = Boolean(options.shouldEmphasizeDirectory);
+  const locationLabel = shouldEmphasizeDirectory ? '目录' : '位置';
+  const locationValue = shouldEmphasizeDirectory ? file.directory : file.path;
+  const locationClassName = shouldEmphasizeDirectory
+    ? 'support-item support-item-path support-item-path-emphasis'
+    : 'support-item support-item-path';
 
   return `
     <div
@@ -567,7 +682,7 @@ function renderFileRow(file, isDuplicate) {
           <span class="support-item">大小：${formatBytes(file.size)}</span>
           <span class="support-item">类型：${escapeHtml(file.extension)}</span>
           <span class="support-item">修改时间：${escapeHtml(formatDateTime(file.modifiedAt))}</span>
-          <span class="support-item">位置：${escapeHtml(file.path)}</span>
+          <span class="${locationClassName}">${locationLabel}：${escapeHtml(locationValue)}</span>
         </div>
       </div>
       <div class="action-cell">
@@ -575,8 +690,8 @@ function renderFileRow(file, isDuplicate) {
           class="icon-button reveal-button"
           type="button"
           data-path="${escapeAttribute(file.path)}"
-          title="在 Finder 中定位文件"
-          aria-label="在 Finder 中定位文件"
+          title="打开所在文件夹"
+          aria-label="打开所在文件夹"
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 6.75A2.75 2.75 0 0 1 6.75 4h3.57c.73 0 1.42.3 1.94.82l.92.93h4.07A2.75 2.75 0 0 1 20 8.5v8.75A2.75 2.75 0 0 1 17.25 20H6.75A2.75 2.75 0 0 1 4 17.25V6.75Z" stroke="currentColor" stroke-width="1.7"/>
@@ -593,7 +708,7 @@ function renderFileThumbnail(file) {
     return `
       <img
         class="thumbnail-image"
-        src="${escapeAttribute(toFileUrl(file.path))}"
+        src="${escapeAttribute(toThumbnailUrl(file.path, 100))}"
         alt="${escapeAttribute(file.name)}"
         loading="lazy"
       />
@@ -680,14 +795,22 @@ async function handleResultsClick(event) {
   const previewButton = event.target.closest('.preview-button');
   if (previewButton) {
     event.stopPropagation();
-    await window.duplicateFinderAPI.previewFile(previewButton.dataset.path);
+    try {
+      await window.duplicateFinderAPI.previewFile(previewButton.dataset.path);
+    } catch (error) {
+      window.alert((error && error.message) || '预览文件失败，请重试。');
+    }
     return;
   }
 
   const revealButton = event.target.closest('.reveal-button');
   if (revealButton) {
     event.stopPropagation();
-    await window.duplicateFinderAPI.revealFile(revealButton.dataset.path);
+    try {
+      await window.duplicateFinderAPI.revealFile(revealButton.dataset.path);
+    } catch (error) {
+      window.alert((error && error.message) || '打开所在文件夹失败，请重试。');
+    }
     return;
   }
 
@@ -715,6 +838,7 @@ function toggleGroupCollapsed(groupId) {
   }
 
   state.collapsedGroups = nextCollapsedGroups;
+  invalidateResultCaches();
   render();
 }
 
@@ -747,6 +871,22 @@ function getGroupSelectionState(group) {
   };
 }
 
+function hasMultipleFileDirectories(group) {
+  if (!group || !group.files || group.files.length < 2) {
+    return false;
+  }
+
+  const directories = new Set();
+  group.files.forEach((file) => {
+    const directory = (file && file.directory) || '';
+    if (directory) {
+      directories.add(directory);
+    }
+  });
+
+  return directories.size > 1;
+}
+
 function updateButtons() {
   const isBusy = state.isScanning || state.isDeleting;
   const scanDisabled = state.directories.length === 0 || isBusy;
@@ -754,14 +894,17 @@ function updateButtons() {
   const hasVisibleGroups = getFilteredGroups().length > 0;
 
   elements.scanButton.disabled = scanDisabled;
+  elements.cancelScanButton.disabled = !state.isScanning || state.isCancellingScan || state.isDeleting;
   elements.clearButton.disabled = state.directories.length === 0 || isBusy;
   elements.selectDirectoriesButton.disabled = isBusy;
   elements.selectAllButton.disabled = !hasVisibleGroups || isBusy;
   elements.invertSelectButton.disabled = !hasVisibleGroups || isBusy;
   elements.autoSelectButton.disabled = !hasVisibleGroups || isBusy;
+  elements.clearThumbnailCacheButton.disabled = isBusy;
   elements.deleteButton.disabled = state.selectedFiles.size === 0 || isBusy;
   elements.fileTypeFilter.disabled = !hasScanGroups || isBusy;
   elements.fileSizeFilter.disabled = !hasScanGroups || isBusy;
+  elements.cancelDeleteButton.disabled = !state.isDeleting || state.isCancellingDelete;
 }
 
 function filterDeletedFilesFromGroups(groups, deletedPaths) {
@@ -797,13 +940,21 @@ function buildSummaryFromGroups(previousSummary, groups, deletedCount) {
 }
 
 function getFilteredGroups() {
+  if (state.resultView.filteredGroupsRevision === state.resultView.revision) {
+    return state.resultView.filteredGroups;
+  }
+
   const groups = state.scanResult && state.scanResult.groups ? state.scanResult.groups : [];
 
-  return groups.filter((group) => {
+  const filteredGroups = groups.filter((group) => {
     const matchesType = matchesFileTypeFilter(group);
     const matchesSize = matchesFileSizeFilter(group);
     return matchesType && matchesSize;
   });
+
+  state.resultView.filteredGroups = filteredGroups;
+  state.resultView.filteredGroupsRevision = state.resultView.revision;
+  return filteredGroups;
 }
 
 function matchesFileTypeFilter(group) {
@@ -875,7 +1026,11 @@ function getSizeRangeKey(size) {
     return '4-5';
   }
 
-  return '5+';
+  if (size < megaByte * 10) {
+    return '5-10';
+  }
+
+  return '10+';
 }
 
 function formatBytes(bytes) {
@@ -959,6 +1114,10 @@ function toFileUrl(filePath) {
   return `${window.location.origin}/file?path=${encodeURIComponent(filePath)}`;
 }
 
+function toThumbnailUrl(filePath, size) {
+  return `${window.location.origin}/thumbnail?path=${encodeURIComponent(filePath)}&size=${encodeURIComponent(size)}&v=${encodeURIComponent(state.thumbnailVersion)}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -976,4 +1135,258 @@ function waitForNextFrame() {
   return new Promise((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+}
+
+function invalidateResultCaches(options = {}) {
+  state.resultView.revision += 1;
+  state.resultView.filteredGroupsRevision = -1;
+  state.resultView.flatItemsRevision = -1;
+
+  if (options.clearHeights) {
+    state.resultView.heightCache.clear();
+  }
+}
+
+function handleResultsViewportChange() {
+  updateResultToolbarShadow();
+
+  if (getFlatResultItems().length <= RESULT_VIRTUALIZATION_THRESHOLD) {
+    return;
+  }
+
+  scheduleResultsRender();
+}
+
+function updateResultToolbarShadow() {
+  if (!elements.resultToolbar || !elements.content) {
+    return;
+  }
+
+  elements.resultToolbar.classList.toggle('is-scrolled', elements.content.scrollTop > 0);
+}
+
+function scheduleResultsRender() {
+  if (state.resultView.renderFrameId) {
+    return;
+  }
+
+  state.resultView.renderFrameId = window.requestAnimationFrame(() => {
+    state.resultView.renderFrameId = 0;
+    renderResults();
+  });
+}
+
+function getFlatResultItems() {
+  if (state.resultView.flatItemsRevision === state.resultView.revision) {
+    return state.resultView.flatItems;
+  }
+
+  const items = [];
+  const groups = getFilteredGroups();
+
+  groups.forEach((group, groupIndex) => {
+    items.push({
+      key: `group:${group.id}`,
+      type: 'group',
+      group,
+      groupIndex,
+    });
+
+    if (state.collapsedGroups.has(group.id)) {
+      if (group.files[0]) {
+        items.push({
+          key: `file:${group.files[0].path}`,
+          type: 'file',
+          file: group.files[0],
+          isDuplicate: false,
+          shouldEmphasizeDirectory: hasMultipleFileDirectories(group),
+        });
+      }
+
+      items.push({
+        key: `tip:${group.id}`,
+        type: 'tip',
+        hiddenCount: Math.max(group.files.length - 1, 0),
+      });
+      return;
+    }
+
+    group.files.forEach((file, fileIndex) => {
+      items.push({
+        key: `file:${file.path}`,
+        type: 'file',
+        file,
+        isDuplicate: fileIndex > 0,
+        shouldEmphasizeDirectory: hasMultipleFileDirectories(group),
+      });
+    });
+  });
+
+  state.resultView.flatItems = items;
+  state.resultView.flatItemsRevision = state.resultView.revision;
+  return items;
+}
+
+function getVirtualizedResultState(items) {
+  if (!elements.content || items.length <= RESULT_VIRTUALIZATION_THRESHOLD) {
+    return {
+      virtualized: false,
+      visibleItems: items,
+      topPadding: 0,
+      bottomPadding: 0,
+    };
+  }
+
+  const contentRect = elements.content.getBoundingClientRect();
+  const resultsRect = elements.results.getBoundingClientRect();
+  const listTop = (resultsRect.top - contentRect.top) + elements.content.scrollTop;
+  const visibleStart = Math.max(elements.content.scrollTop - listTop - RESULT_VIRTUALIZATION_OVERSCAN, 0);
+  const visibleEnd = Math.max(
+    visibleStart + elements.content.clientHeight + (RESULT_VIRTUALIZATION_OVERSCAN * 2),
+    visibleStart,
+  );
+
+  let startIndex = 0;
+  let endIndex = items.length;
+  let totalHeight = 0;
+  let topPadding = 0;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const itemHeight = getResultItemHeight(items[index]);
+    const nextHeight = totalHeight + itemHeight;
+
+    if (nextHeight < visibleStart) {
+      startIndex = index + 1;
+      topPadding = nextHeight;
+    }
+
+    if (endIndex === items.length && totalHeight > visibleEnd) {
+      endIndex = index;
+    }
+
+    totalHeight = nextHeight;
+  }
+
+  if (endIndex < startIndex) {
+    endIndex = startIndex;
+  }
+
+  if (items.length > 0 && endIndex === startIndex) {
+    endIndex = Math.min(startIndex + 1, items.length);
+  }
+
+  const visibleItems = items.slice(startIndex, endIndex);
+  const visibleHeight = visibleItems.reduce((sum, item) => sum + getResultItemHeight(item), 0);
+
+  return {
+    virtualized: true,
+    visibleItems,
+    topPadding,
+    bottomPadding: Math.max(totalHeight - topPadding - visibleHeight, 0),
+  };
+}
+
+function getResultItemHeight(item) {
+  return state.resultView.heightCache.get(item.key) || RESULT_ITEM_ESTIMATED_HEIGHTS[item.type] || 72;
+}
+
+function renderVirtualizedResultItems(virtualState) {
+  const html = [];
+
+  if (virtualState.virtualized && virtualState.topPadding > 0) {
+    html.push(renderResultSpacer(virtualState.topPadding));
+  }
+
+  virtualState.visibleItems.forEach((item) => {
+    html.push(renderResultItem(item));
+  });
+
+  if (virtualState.virtualized && virtualState.bottomPadding > 0) {
+    html.push(renderResultSpacer(virtualState.bottomPadding));
+  }
+
+  return html.join('');
+}
+
+function renderResultSpacer(height) {
+  return `<div class="result-virtual-spacer" style="height:${Math.round(height)}px" aria-hidden="true"></div>`;
+}
+
+function renderResultItem(item) {
+  if (item.type === 'group') {
+    const selectionState = getGroupSelectionState(item.group);
+
+    return `
+      <div class="result-item result-item-group" data-virtual-key="${escapeAttribute(item.key)}" data-virtual-type="group">
+        <div class="result-group-title">
+          <div class="group-title-main">
+            <button
+              class="group-collapse-button"
+              type="button"
+              data-group-id="${escapeAttribute(item.group.id)}"
+              title="${state.collapsedGroups.has(item.group.id) ? '展开当前分组' : '收起当前分组'}"
+              aria-label="${state.collapsedGroups.has(item.group.id) ? '展开当前分组' : '收起当前分组'}"
+            >
+              <svg
+                class="${state.collapsedGroups.has(item.group.id) ? 'is-collapsed' : ''}"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <label class="group-checkbox-label" title="选择当前这一组的全部文件">
+              <input
+                class="group-checkbox"
+                type="checkbox"
+                data-group-id="${escapeAttribute(item.group.id)}"
+                ${selectionState.checked ? 'checked' : ''}
+              />
+            </label>
+            <h3>第 ${item.groupIndex + 1} 组重复文件</h3>
+          </div>
+          <span class="tag">${formatNumber(item.group.fileCount)} 个文件</span>
+        </div>
+      </div>
+    `;
+  }
+
+  if (item.type === 'tip') {
+    return `
+      <div class="result-item result-item-tip" data-virtual-key="${escapeAttribute(item.key)}" data-virtual-type="tip">
+        <div class="group-collapsed-tip">
+          已收起其余 ${Math.max(item.hiddenCount, 0)} 个重复文件，不影响已选文件。
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="result-item result-item-file" data-virtual-key="${escapeAttribute(item.key)}" data-virtual-type="file">
+      ${renderFileRow(item.file, item.isDuplicate, { shouldEmphasizeDirectory: item.shouldEmphasizeDirectory })}
+    </div>
+  `;
+}
+
+function measureVisibleResultItems() {
+  const renderedItems = elements.results.querySelectorAll('[data-virtual-key]');
+  let didChange = false;
+
+  renderedItems.forEach((item) => {
+    const nextHeight = Math.round(item.getBoundingClientRect().height);
+    if (nextHeight <= 0) {
+      return;
+    }
+
+    const previousHeight = state.resultView.heightCache.get(item.dataset.virtualKey);
+    if (previousHeight !== nextHeight) {
+      state.resultView.heightCache.set(item.dataset.virtualKey, nextHeight);
+      didChange = true;
+    }
+  });
+
+  if (didChange) {
+    scheduleResultsRender();
+  }
 }

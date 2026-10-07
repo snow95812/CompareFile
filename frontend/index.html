@@ -21,6 +21,7 @@
           <div class="actions">
             <button id="selectDirectoriesButton" class="button button-primary">选择目录</button>
             <button id="scanButton" class="button button-secondary" disabled>开始扫描</button>
+            <button id="cancelScanButton" class="button button-ghost" disabled>中止</button>
           </div>
         </div>
 
@@ -100,6 +101,7 @@
               <button id="autoSelectButton" class="button button-ghost" disabled>自动选择重复文件</button>
               <button id="deleteButton" class="button button-danger" disabled>删除文件</button>
               <span id="selectedCount" class="tag">已选 0 个</span>
+              <button id="clearThumbnailCacheButton" class="button button-danger">清除缩略图缓存</button>
             </div>
           </div>
           <div class="result-filters">
@@ -121,7 +123,8 @@
                 <option value="2-3">2-3M</option>
                 <option value="3-4">3-4M</option>
                 <option value="4-5">4-5M</option>
-                <option value="5+">5M以上</option>
+                <option value="5-10">5-10M</option>
+                <option value="10+">10M以上</option>
               </select>
             </label>
           </div>
@@ -146,7 +149,11 @@
       <div class="progress-modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteProgressTitle">
         <div class="progress-modal-header">
           <h2 id="deleteProgressTitle">正在删除文件</h2>
-          <span id="deleteProgressPercent" class="tag">0%</span>
+          <div class="progress-modal-header-actions">
+            <button id="cancelDeleteButton" class="button button-ghost">取消</button>
+            <span id="deleteProgressCount" class="tag">0/0</span>
+            <span id="deleteProgressPercent" class="tag">0%</span>
+          </div>
         </div>
         <div class="scan-progress-track progress-modal-track">
           <div id="deleteProgressBar" class="scan-progress-bar"></div>
