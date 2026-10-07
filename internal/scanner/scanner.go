@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -128,7 +130,7 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 			return ScanResult{}, err
 		}
 
-		key := fileKeyBySizeAndExtension(file)
+		key := fileKeyBySize(file)
 		candidateMap[key] = append(candidateMap[key], file)
 	}
 
@@ -140,43 +142,27 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 
 	emitProgress(Progress{
 		Percent: 55,
-		Stage:   "正在校验文件内容",
+		Stage:   "正在快速比对文件特征",
 		Detail:  "待比对 " + itoa(len(candidateFiles)) + " 个文件",
 	})
 
-	hashedFiles := make([]FileInfo, 0, len(candidateFiles))
-	for index, file := range candidateFiles {
-		if err := checkCancelled(ctx); err != nil {
-			return ScanResult{}, err
-		}
-
-		hash, err := hashFileWithContext(ctx, file.Path)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return ScanResult{}, err
-			}
-
-			skipped = append(skipped, SkippedItem{
-				Path:   file.Path,
-				Reason: "无法读取文件内容：" + err.Error(),
-			})
-			continue
-		}
-
-		file.Hash = hash
-		hashedFiles = append(hashedFiles, file)
-
-		percent := 90
-		if len(candidateFiles) > 0 {
-			percent = 55 + int(float64(index+1)/float64(len(candidateFiles))*35)
-		}
-
-		emitProgress(Progress{
-			Percent: percent,
-			Stage:   "正在校验文件内容",
-			Detail:  file.Directory,
-		})
+	sampledCandidates, sampleSkipped, err := filterCandidatesBySampleWithContext(ctx, candidateFiles, emitProgress)
+	if err != nil {
+		return ScanResult{}, err
 	}
+	skipped = append(skipped, sampleSkipped...)
+
+	emitProgress(Progress{
+		Percent: 72,
+		Stage:   "正在校验文件内容",
+		Detail:  "待校验 " + itoa(len(sampledCandidates)) + " 个文件",
+	})
+
+	hashedFiles, hashSkipped, err := hashCandidatesWithContext(ctx, sampledCandidates, emitProgress)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	skipped = append(skipped, hashSkipped...)
 
 	if err := checkCancelled(ctx); err != nil {
 		return ScanResult{}, err
@@ -384,6 +370,228 @@ func normalizeExtension(fileName string) string {
 	return extension
 }
 
+const fileSampleChunkSize int64 = 256 * 1024
+
+type sampleResult struct {
+	file   FileInfo
+	sample string
+	err    error
+}
+
+type hashResult struct {
+	file FileInfo
+	hash string
+	err  error
+}
+
+func filterCandidatesBySampleWithContext(ctx context.Context, candidateFiles []FileInfo, emitProgress ProgressFunc) ([]FileInfo, []SkippedItem, error) {
+	if len(candidateFiles) == 0 {
+		return nil, nil, nil
+	}
+
+	results := make(chan sampleResult, len(candidateFiles))
+	go func() {
+		runFileWorkers(ctx, candidateFiles, func(file FileInfo) {
+			sample, err := sampleFileWithContext(ctx, file.Path, file.Size)
+			results <- sampleResult{
+				file:   file,
+				sample: sample,
+				err:    err,
+			}
+		})
+		close(results)
+	}()
+
+	skipped := make([]SkippedItem, 0)
+	sampleGroups := make(map[string][]FileInfo)
+	processed := 0
+	total := len(candidateFiles)
+
+	for result := range results {
+		if result.err != nil {
+			if errors.Is(result.err, context.Canceled) {
+				return nil, skipped, result.err
+			}
+
+			skipped = append(skipped, SkippedItem{
+				Path:   result.file.Path,
+				Reason: "无法读取文件特征：" + result.err.Error(),
+			})
+		} else {
+			key := fileKeyBySizeAndSample(result.file, result.sample)
+			sampleGroups[key] = append(sampleGroups[key], result.file)
+		}
+
+		processed += 1
+		percent := 72
+		if total > 0 {
+			percent = 55 + int(float64(processed)/float64(total)*17)
+		}
+
+		emitProgress(Progress{
+			Percent: percent,
+			Current: processed,
+			Total:   total,
+			Stage:   "正在快速比对文件特征",
+			Detail:  result.file.Directory,
+		})
+	}
+
+	if err := checkCancelled(ctx); err != nil {
+		return nil, skipped, err
+	}
+
+	filtered := make([]FileInfo, 0)
+	for _, group := range sampleGroups {
+		if len(group) > 1 {
+			filtered = append(filtered, group...)
+		}
+	}
+
+	return filtered, skipped, nil
+}
+
+func hashCandidatesWithContext(ctx context.Context, candidateFiles []FileInfo, emitProgress ProgressFunc) ([]FileInfo, []SkippedItem, error) {
+	if len(candidateFiles) == 0 {
+		return nil, nil, nil
+	}
+
+	results := make(chan hashResult, len(candidateFiles))
+	go func() {
+		runFileWorkers(ctx, candidateFiles, func(file FileInfo) {
+			hash, err := hashFileWithContext(ctx, file.Path)
+			results <- hashResult{
+				file: file,
+				hash: hash,
+				err:  err,
+			}
+		})
+		close(results)
+	}()
+
+	skipped := make([]SkippedItem, 0)
+	hashedFiles := make([]FileInfo, 0, len(candidateFiles))
+	processed := 0
+	total := len(candidateFiles)
+
+	for result := range results {
+		if result.err != nil {
+			if errors.Is(result.err, context.Canceled) {
+				return nil, skipped, result.err
+			}
+
+			skipped = append(skipped, SkippedItem{
+				Path:   result.file.Path,
+				Reason: "无法读取文件内容：" + result.err.Error(),
+			})
+		} else {
+			file := result.file
+			file.Hash = result.hash
+			hashedFiles = append(hashedFiles, file)
+		}
+
+		processed += 1
+		percent := 90
+		if total > 0 {
+			percent = 72 + int(float64(processed)/float64(total)*18)
+		}
+
+		emitProgress(Progress{
+			Percent: percent,
+			Current: processed,
+			Total:   total,
+			Stage:   "正在校验文件内容",
+			Detail:  result.file.Directory,
+		})
+	}
+
+	if err := checkCancelled(ctx); err != nil {
+		return nil, skipped, err
+	}
+
+	return hashedFiles, skipped, nil
+}
+
+func runFileWorkers(ctx context.Context, files []FileInfo, processor func(FileInfo)) {
+	if len(files) == 0 {
+		return
+	}
+
+	workerCount := calculateFileWorkerCount(len(files))
+	jobs := make(chan FileInfo, len(files))
+	var workers sync.WaitGroup
+
+	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+
+			for file := range jobs {
+				if err := checkCancelled(ctx); err != nil {
+					return
+				}
+
+				processor(file)
+			}
+		}()
+	}
+
+	for _, file := range files {
+		jobs <- file
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func calculateFileWorkerCount(fileCount int) int {
+	if fileCount <= 1 {
+		return 1
+	}
+
+	workerCount := runtime.NumCPU()
+	if workerCount < 2 {
+		workerCount = 2
+	}
+	if workerCount > 6 {
+		workerCount = 6
+	}
+	if fileCount < workerCount {
+		workerCount = fileCount
+	}
+
+	return workerCount
+}
+
+func sampleFileWithContext(ctx context.Context, filePath string, fileSize int64) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if fileSize <= fileSampleChunkSize*2 {
+		if err := writeReaderBytesWithContext(ctx, file, hash, -1); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(hash.Sum(nil)), nil
+	}
+
+	if err := writeReaderBytesWithContext(ctx, file, hash, fileSampleChunkSize); err != nil {
+		return "", err
+	}
+
+	if _, err := file.Seek(fileSize-fileSampleChunkSize, io.SeekStart); err != nil {
+		return "", err
+	}
+
+	if err := writeReaderBytesWithContext(ctx, file, hash, fileSampleChunkSize); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func hashFileWithContext(ctx context.Context, filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -392,16 +600,35 @@ func hashFileWithContext(ctx context.Context, filePath string) (string, error) {
 	defer file.Close()
 
 	hash := sha256.New()
+	if err := writeReaderBytesWithContext(ctx, file, hash, -1); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeReaderBytesWithContext(ctx context.Context, file *os.File, writer io.Writer, limit int64) error {
 	buffer := make([]byte, 1024*1024)
-	for {
+	remaining := limit
+
+	for remaining != 0 {
 		if err := checkCancelled(ctx); err != nil {
-			return "", err
+			return err
 		}
 
-		bytesRead, readErr := file.Read(buffer)
+		readBuffer := buffer
+		if remaining > 0 && int64(len(readBuffer)) > remaining {
+			readBuffer = buffer[:int(remaining)]
+		}
+
+		bytesRead, readErr := file.Read(readBuffer)
 		if bytesRead > 0 {
-			if _, writeErr := hash.Write(buffer[:bytesRead]); writeErr != nil {
-				return "", writeErr
+			if _, writeErr := writer.Write(readBuffer[:bytesRead]); writeErr != nil {
+				return writeErr
+			}
+
+			if remaining > 0 {
+				remaining -= int64(bytesRead)
 			}
 		}
 
@@ -409,15 +636,19 @@ func hashFileWithContext(ctx context.Context, filePath string) (string, error) {
 			break
 		}
 		if readErr != nil {
-			return "", readErr
+			return readErr
 		}
 	}
 
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return nil
 }
 
-func fileKeyBySizeAndExtension(file FileInfo) string {
-	return itoa64(file.Size) + "::" + file.Extension
+func fileKeyBySize(file FileInfo) string {
+	return itoa64(file.Size)
+}
+
+func fileKeyBySizeAndSample(file FileInfo, sample string) string {
+	return itoa64(file.Size) + "::" + sample
 }
 
 func fileKeyBySizeAndHash(file FileInfo) string {

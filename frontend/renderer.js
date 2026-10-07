@@ -37,6 +37,7 @@ const state = {
 
 const elements = {
   appTitle: document.getElementById('appTitle'),
+  scanHelpButton: document.getElementById('scanHelpButton'),
   selectDirectoriesButton: document.getElementById('selectDirectoriesButton'),
   scanButton: document.getElementById('scanButton'),
   cancelScanButton: document.getElementById('cancelScanButton'),
@@ -75,6 +76,7 @@ const elements = {
   skippedCount: document.getElementById('skippedCount'),
   skippedList: document.getElementById('skippedList'),
   content: document.querySelector('.content'),
+  scrollToTopButton: document.getElementById('scrollToTopButton'),
 };
 
 const RESULT_VIRTUALIZATION_THRESHOLD = 180;
@@ -99,6 +101,9 @@ elements.fileTypeFilter.addEventListener('change', handleFilterChange);
 elements.fileSizeFilter.addEventListener('change', handleFilterChange);
 elements.results.addEventListener('change', handleResultsChange);
 elements.results.addEventListener('click', handleResultsClick);
+if (elements.scrollToTopButton) {
+  elements.scrollToTopButton.addEventListener('click', handleScrollToTop);
+}
 if (elements.content) {
   elements.content.addEventListener('scroll', handleResultsViewportChange, { passive: true });
 }
@@ -137,6 +142,7 @@ if (
 initializeAppTitle();
 render();
 updateResultToolbarShadow();
+updateScrollToTopButton();
 
 async function initializeAppTitle() {
   try {
@@ -477,9 +483,11 @@ function render() {
   renderScanProgress();
   renderDeleteProgressModal();
   renderSummary();
+  renderFileTypeFilterOptions();
   renderResults();
   renderSkipped();
   updateButtons();
+  updateScrollToTopButton();
 }
 
 function renderDirectoryList() {
@@ -605,7 +613,6 @@ function renderResults() {
   const items = getFlatResultItems();
   elements.resultCount.textContent = `${groups.length} 组`;
   elements.selectedCount.textContent = `已选 ${state.selectedFiles.size} 个`;
-  elements.fileTypeFilter.value = state.filters.fileType;
   elements.fileSizeFilter.value = state.filters.fileSize;
 
   if (
@@ -907,6 +914,32 @@ function updateButtons() {
   elements.cancelDeleteButton.disabled = !state.isDeleting || state.isCancellingDelete;
 }
 
+function renderFileTypeFilterOptions() {
+  const options = getAvailableFileTypeOptions();
+
+  if (state.filters.fileType !== 'all' && !options.some((option) => option.value === state.filters.fileType)) {
+    state.filters = {
+      ...state.filters,
+      fileType: 'all',
+    };
+    invalidateResultCaches();
+    syncSelectedFilesToVisibleGroups();
+  }
+
+  const nextMarkup = [
+    '<option value="all">全部类型</option>',
+    ...options.map(
+      (option) => `<option value="${escapeAttribute(option.value)}">${escapeHtml(option.label)}</option>`,
+    ),
+  ].join('');
+
+  if (elements.fileTypeFilter.innerHTML !== nextMarkup) {
+    elements.fileTypeFilter.innerHTML = nextMarkup;
+  }
+
+  elements.fileTypeFilter.value = state.filters.fileType;
+}
+
 function filterDeletedFilesFromGroups(groups, deletedPaths) {
   const deletedSet = new Set(deletedPaths);
 
@@ -962,8 +995,7 @@ function matchesFileTypeFilter(group) {
     return true;
   }
 
-  const category = getFileCategory(group.extension || (group.files && group.files[0] && group.files[0].extension));
-  return category === state.filters.fileType;
+  return group.files.some((file) => normalizeFileExtension(file.extension) === state.filters.fileType);
 }
 
 function matchesFileSizeFilter(group) {
@@ -987,20 +1019,37 @@ function syncSelectedFilesToVisibleGroups() {
   );
 }
 
-function getFileCategory(extension) {
-  if (isImageFile(extension)) {
-    return 'image';
+function getAvailableFileTypeOptions() {
+  const groups = state.scanResult && state.scanResult.groups ? state.scanResult.groups : [];
+  const counts = new Map();
+
+  groups.forEach((group) => {
+    group.files.forEach((file) => {
+      const extension = normalizeFileExtension(file.extension);
+      counts.set(extension, (counts.get(extension) || 0) + 1);
+    });
+  });
+
+  return [...counts.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1];
+      }
+
+      return left[0].localeCompare(right[0], 'zh-CN');
+    })
+    .map(([value]) => ({
+      value,
+      label: value,
+    }));
+}
+
+function normalizeFileExtension(extension) {
+  if (!extension) {
+    return '(无扩展名)';
   }
 
-  if (isVideoFile(extension)) {
-    return 'video';
-  }
-
-  if (isAudioFile(extension)) {
-    return 'audio';
-  }
-
-  return 'other';
+  return String(extension).trim() || '(无扩展名)';
 }
 
 function getSizeRangeKey(size) {
@@ -1149,6 +1198,7 @@ function invalidateResultCaches(options = {}) {
 
 function handleResultsViewportChange() {
   updateResultToolbarShadow();
+  updateScrollToTopButton();
 
   if (getFlatResultItems().length <= RESULT_VIRTUALIZATION_THRESHOLD) {
     return;
@@ -1163,6 +1213,27 @@ function updateResultToolbarShadow() {
   }
 
   elements.resultToolbar.classList.toggle('is-scrolled', elements.content.scrollTop > 0);
+}
+
+function updateScrollToTopButton() {
+  if (!elements.scrollToTopButton || !elements.content) {
+    return;
+  }
+
+  const canScroll = elements.content.scrollHeight > elements.content.clientHeight + 24;
+  const shouldShow = canScroll && elements.content.scrollTop > 240;
+  elements.scrollToTopButton.classList.toggle('is-visible', shouldShow);
+}
+
+function handleScrollToTop() {
+  if (!elements.content) {
+    return;
+  }
+
+  elements.content.scrollTo({
+    top: 0,
+    behavior: 'smooth',
+  });
 }
 
 function scheduleResultsRender() {
