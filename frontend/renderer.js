@@ -711,7 +711,7 @@ function renderFileRow(file, isDuplicate, options = {}) {
 }
 
 function renderFileThumbnail(file) {
-  if (isImageFile(file.extension)) {
+  if (isImageFile(file.extension) || isVideoFile(file.extension)) {
     return `
       <img
         class="thumbnail-image"
