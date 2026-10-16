@@ -165,6 +165,35 @@
                 <option value="100+">100M以上</option>
               </select>
             </label>
+            <div class="filter-range-group" aria-label="文件大小范围筛选">
+              <span class="filter-label">范围</span>
+              <div class="filter-range-inputs">
+                <label class="filter-range-input-wrap" for="fileSizeMinInput">
+                  <input
+                    id="fileSizeMinInput"
+                    class="filter-range-input"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="最小"
+                    disabled
+                  />
+                  <span class="filter-range-unit">M</span>
+                </label>
+                <span class="filter-range-separator">-</span>
+                <label class="filter-range-input-wrap" for="fileSizeMaxInput">
+                  <input
+                    id="fileSizeMaxInput"
+                    class="filter-range-input"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="最大"
+                    disabled
+                  />
+                  <span class="filter-range-unit">M</span>
+                </label>
+                <button id="applyFileSizeRangeButton" class="button button-secondary" type="button" disabled>确定</button>
+              </div>
+            </div>
           </div>
           <div id="results" class="results">
             <div class="empty-state">扫描完成后会在这里展示重复文件分组。</div>
