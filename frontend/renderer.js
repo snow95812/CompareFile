@@ -10,6 +10,11 @@ const state = {
   filters: {
     fileType: 'all',
     fileSize: 'all',
+    fileSizeRange: null,
+  },
+  fileSizeRangeDraft: {
+    min: '',
+    max: '',
   },
   scanProgress: {
     percent: 0,
@@ -53,6 +58,9 @@ const elements = {
   deleteButton: document.getElementById('deleteButton'),
   fileTypeFilter: document.getElementById('fileTypeFilter'),
   fileSizeFilter: document.getElementById('fileSizeFilter'),
+  fileSizeMinInput: document.getElementById('fileSizeMinInput'),
+  fileSizeMaxInput: document.getElementById('fileSizeMaxInput'),
+  applyFileSizeRangeButton: document.getElementById('applyFileSizeRangeButton'),
   directoryList: document.getElementById('directoryList'),
   directoryCount: document.getElementById('directoryCount'),
   statusText: document.getElementById('statusText'),
@@ -106,6 +114,9 @@ elements.deleteButton.addEventListener('click', handleDeleteSelectedFiles);
 elements.cancelDeleteButton.addEventListener('click', handleCancelDelete);
 elements.fileTypeFilter.addEventListener('change', handleFilterChange);
 elements.fileSizeFilter.addEventListener('change', handleFilterChange);
+elements.fileSizeMinInput.addEventListener('input', handleFileSizeRangeInput);
+elements.fileSizeMaxInput.addEventListener('input', handleFileSizeRangeInput);
+elements.applyFileSizeRangeButton.addEventListener('click', handleApplyFileSizeRange);
 elements.results.addEventListener('change', handleResultsChange);
 elements.results.addEventListener('click', handleResultsClick);
 if (elements.scrollToTopButton) {
@@ -518,10 +529,67 @@ async function handleCancelDelete() {
   }
 }
 
-function handleFilterChange() {
+function handleFilterChange(event) {
+  if (event.target === elements.fileTypeFilter) {
+    state.filters = {
+      ...state.filters,
+      fileType: elements.fileTypeFilter.value,
+    };
+    invalidateResultCaches();
+    syncSelectedFilesToVisibleGroups();
+    render();
+    return;
+  }
+
+  state.fileSizeRangeDraft = {
+    min: '',
+    max: '',
+  };
   state.filters = {
-    fileType: elements.fileTypeFilter.value,
+    ...state.filters,
     fileSize: elements.fileSizeFilter.value,
+    fileSizeRange: null,
+  };
+  invalidateResultCaches();
+  syncSelectedFilesToVisibleGroups();
+  render();
+}
+
+function handleFileSizeRangeInput(event) {
+  const inputKey = event.target === elements.fileSizeMaxInput ? 'max' : 'min';
+  const sanitizedValue = sanitizeDigits(event.target.value);
+
+  if (event.target.value !== sanitizedValue) {
+    event.target.value = sanitizedValue;
+  }
+
+  state.fileSizeRangeDraft = {
+    ...state.fileSizeRangeDraft,
+    [inputKey]: sanitizedValue,
+  };
+
+  if (hasFileSizeRangeDraftValue()) {
+    elements.fileSizeFilter.value = 'all';
+  }
+
+  renderFileSizeFilterControls();
+  updateButtons();
+}
+
+function handleApplyFileSizeRange() {
+  const rangeDraft = getNormalizedFileSizeRangeDraft();
+
+  if (!isFileSizeRangeDraftValid(rangeDraft)) {
+    window.alert('范围筛选的最小值不能大于最大值。');
+    elements.fileSizeMaxInput.focus();
+    return;
+  }
+
+  state.fileSizeRangeDraft = rangeDraft;
+  state.filters = {
+    ...state.filters,
+    fileSize: 'all',
+    fileSizeRange: createAppliedFileSizeRange(rangeDraft),
   };
   invalidateResultCaches();
   syncSelectedFilesToVisibleGroups();
@@ -535,6 +603,7 @@ function render() {
   renderDeleteProgressModal();
   renderSummary();
   renderFileTypeFilterOptions();
+  renderFileSizeFilterControls();
   renderResults();
   renderSkipped();
   updateButtons();
@@ -672,7 +741,6 @@ function renderResults() {
   const items = getFlatResultItems();
   elements.resultCount.textContent = `${groups.length} 组`;
   elements.selectedCount.textContent = `已选 ${state.selectedFiles.size} 个`;
-  elements.fileSizeFilter.value = state.filters.fileSize;
 
   if (
     state.scanResult &&
@@ -969,6 +1037,9 @@ function updateButtons() {
   elements.deleteButton.disabled = state.selectedFiles.size === 0 || isBusy;
   elements.fileTypeFilter.disabled = !hasScanGroups || isBusy;
   elements.fileSizeFilter.disabled = !hasScanGroups || isBusy;
+  elements.fileSizeMinInput.disabled = !hasScanGroups || isBusy;
+  elements.fileSizeMaxInput.disabled = !hasScanGroups || isBusy;
+  elements.applyFileSizeRangeButton.disabled = !hasScanGroups || isBusy || !canApplyFileSizeRangeDraft();
   elements.cancelDeleteButton.disabled = !state.isDeleting || state.isCancellingDelete;
   elements.minScanSizeInput.disabled = isBusy;
 }
@@ -1059,6 +1130,10 @@ function matchesFileTypeFilter(group) {
 }
 
 function matchesFileSizeFilter(group) {
+  if (state.filters.fileSizeRange) {
+    return matchesFileSizeRange(group.size, state.filters.fileSizeRange);
+  }
+
   if (state.filters.fileSize === 'all') {
     return true;
   }
@@ -1312,6 +1387,98 @@ function getNormalizedMinScanSizeInputValue() {
 
 function getAppliedMinScanSizeLabel() {
   return state.lastScanMinSizeMBText ? `${state.lastScanMinSizeMBText}M` : '';
+}
+
+function renderFileSizeFilterControls() {
+  const rangeDraft = getNormalizedFileSizeRangeDraft();
+  const nextFileSizeValue = (rangeDraft.min || rangeDraft.max) ? 'all' : state.filters.fileSize;
+
+  if (elements.fileSizeFilter.value !== nextFileSizeValue) {
+    elements.fileSizeFilter.value = nextFileSizeValue;
+  }
+
+  if (elements.fileSizeMinInput.value !== rangeDraft.min) {
+    elements.fileSizeMinInput.value = rangeDraft.min;
+  }
+
+  if (elements.fileSizeMaxInput.value !== rangeDraft.max) {
+    elements.fileSizeMaxInput.value = rangeDraft.max;
+  }
+}
+
+function getNormalizedFileSizeRangeDraft() {
+  return {
+    min: sanitizeDigits(state.fileSizeRangeDraft.min),
+    max: sanitizeDigits(state.fileSizeRangeDraft.max),
+  };
+}
+
+function getAppliedFileSizeRangeDraft() {
+  if (!state.filters.fileSizeRange) {
+    return {
+      min: '',
+      max: '',
+    };
+  }
+
+  return {
+    min: state.filters.fileSizeRange.minMB === null ? '' : String(state.filters.fileSizeRange.minMB),
+    max: state.filters.fileSizeRange.maxMB === null ? '' : String(state.filters.fileSizeRange.maxMB),
+  };
+}
+
+function hasFileSizeRangeDraftValue() {
+  const rangeDraft = getNormalizedFileSizeRangeDraft();
+  return Boolean(rangeDraft.min || rangeDraft.max);
+}
+
+function isFileSizeRangeDraftValid(rangeDraft = getNormalizedFileSizeRangeDraft()) {
+  if (!rangeDraft.min || !rangeDraft.max) {
+    return true;
+  }
+
+  return Number(rangeDraft.min) <= Number(rangeDraft.max);
+}
+
+function canApplyFileSizeRangeDraft() {
+  const rangeDraft = getNormalizedFileSizeRangeDraft();
+  if (!isFileSizeRangeDraftValid(rangeDraft)) {
+    return false;
+  }
+
+  const appliedRange = getAppliedFileSizeRangeDraft();
+  return rangeDraft.min !== appliedRange.min || rangeDraft.max !== appliedRange.max;
+}
+
+function createAppliedFileSizeRange(rangeDraft) {
+  if (!rangeDraft.min && !rangeDraft.max) {
+    return null;
+  }
+
+  return {
+    minMB: rangeDraft.min === '' ? null : Number(rangeDraft.min),
+    maxMB: rangeDraft.max === '' ? null : Number(rangeDraft.max),
+  };
+}
+
+function matchesFileSizeRange(size, range) {
+  const megaByte = 1024 * 1024;
+  const minSize = range.minMB === null ? null : range.minMB * megaByte;
+  const maxSize = range.maxMB === null ? null : range.maxMB * megaByte;
+
+  if (minSize !== null && size < minSize) {
+    return false;
+  }
+
+  if (maxSize !== null && size > maxSize) {
+    return false;
+  }
+
+  return true;
+}
+
+function sanitizeDigits(value) {
+  return String(value || '').replace(/\D+/g, '');
 }
 
 function invalidateResultCaches(options = {}) {

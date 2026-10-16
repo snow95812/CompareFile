@@ -526,6 +526,13 @@ button {
   gap: 8px;
 }
 
+.filter-range-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .filter-label {
   color: #62708a;
   font-size: 12px;
@@ -547,6 +554,56 @@ button {
 .filter-select:disabled {
   background: #f3f6fb;
   color: #8b96aa;
+}
+
+.filter-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-range-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 98px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.filter-range-input {
+  width: 48px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #20304d;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.filter-range-input::placeholder {
+  color: #8b96aa;
+}
+
+.filter-range-input:disabled,
+.filter-range-input:disabled + .filter-range-unit {
+  color: #8b96aa;
+}
+
+.filter-range-input-wrap:has(.filter-range-input:disabled) {
+  background: #f3f6fb;
+}
+
+.filter-range-unit,
+.filter-range-separator {
+  color: #62708a;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .result-row {
