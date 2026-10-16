@@ -865,18 +865,25 @@ func (app *DesktopApp) ensureThumbnail(filePath string, size int) ([]byte, strin
 	}
 	defer sourceFile.Close()
 
+	thumbnailData := []byte(nil)
+	contentType := ""
+
 	sourceImage, _, err := image.Decode(sourceFile)
-	if err != nil {
-		return nil, "", err
-	}
+	if err == nil {
+		thumbnailImage := createSquareThumbnail(sourceImage, size)
+		buffer := bytes.NewBuffer(nil)
+		if err := jpeg.Encode(buffer, thumbnailImage, &jpeg.Options{Quality: 72}); err != nil {
+			return nil, "", err
+		}
 
-	thumbnailImage := createSquareThumbnail(sourceImage, size)
-	buffer := bytes.NewBuffer(nil)
-	if err := jpeg.Encode(buffer, thumbnailImage, &jpeg.Options{Quality: 72}); err != nil {
-		return nil, "", err
+		thumbnailData = buffer.Bytes()
+		contentType = "image/jpeg"
+	} else {
+		thumbnailData, contentType, err = generatePlatformThumbnail(filePath, size, app.thumbDir)
+		if err != nil {
+			return nil, "", err
+		}
 	}
-
-	thumbnailData := buffer.Bytes()
 
 	app.thumbMu.Lock()
 	defer app.thumbMu.Unlock()
@@ -891,12 +898,12 @@ func (app *DesktopApp) ensureThumbnail(filePath string, size int) ([]byte, strin
 	app.thumbCacheSeq += 1
 	app.thumbCache[cacheKey] = thumbnailCacheEntry{
 		Data:        append([]byte(nil), thumbnailData...),
-		ContentType: "image/jpeg",
+		ContentType: contentType,
 		Sequence:    app.thumbCacheSeq,
 	}
 	pruneThumbnailCache(app.thumbCache, 240)
 
-	return thumbnailData, "image/jpeg", nil
+	return thumbnailData, contentType, nil
 }
 
 func (app *DesktopApp) ClearThumbnailCache() (string, error) {
