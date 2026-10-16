@@ -154,6 +154,10 @@ button {
   overflow: hidden;
 }
 
+.directory-panel .panel-header {
+  margin-bottom: 12px;
+}
+
 .muted {
   color: #62708a;
   line-height: 1.6;
