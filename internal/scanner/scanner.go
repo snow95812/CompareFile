@@ -17,19 +17,21 @@ import (
 )
 
 type Progress struct {
-	Percent int    `json:"percent"`
-	Current int    `json:"current,omitempty"`
-	Total   int    `json:"total,omitempty"`
-	Stage   string `json:"stage"`
-	Detail  string `json:"detail"`
+	Percent      int    `json:"percent"`
+	Current      int    `json:"current,omitempty"`
+	Total        int    `json:"total,omitempty"`
+	ScannedFiles int    `json:"scannedFiles,omitempty"`
+	Stage        string `json:"stage"`
+	Detail       string `json:"detail"`
 }
 
 type Summary struct {
-	TotalFiles      int   `json:"totalFiles"`
-	CandidateFiles  int   `json:"candidateFiles"`
-	DuplicateGroups int   `json:"duplicateGroups"`
-	DuplicateFiles  int   `json:"duplicateFiles"`
-	WastedSize      int64 `json:"wastedSize"`
+	ScanDurationSeconds int64 `json:"scanDurationSeconds"`
+	TotalFiles          int   `json:"totalFiles"`
+	CandidateFiles      int   `json:"candidateFiles"`
+	DuplicateGroups     int   `json:"duplicateGroups"`
+	DuplicateFiles      int   `json:"duplicateFiles"`
+	WastedSize          int64 `json:"wastedSize"`
 }
 
 type SkippedItem struct {
@@ -70,22 +72,35 @@ type ScanResult struct {
 	Skipped            []SkippedItem    `json:"skipped"`
 }
 
-type ProgressFunc func(Progress)
-
-func ScanDirectories(directories []string, onProgress ProgressFunc) (ScanResult, error) {
-	return ScanDirectoriesWithContext(context.Background(), directories, onProgress)
+type ScanOptions struct {
+	HasMinFileSize bool
+	MinFileSize    int64
 }
 
-func ScanDirectoriesWithContext(ctx context.Context, directories []string, onProgress ProgressFunc) (ScanResult, error) {
+type ProgressFunc func(Progress)
+
+func ScanDirectories(directories []string, options ScanOptions, onProgress ProgressFunc) (ScanResult, error) {
+	return ScanDirectoriesWithContext(context.Background(), directories, options, onProgress)
+}
+
+func ScanDirectoriesWithContext(ctx context.Context, directories []string, options ScanOptions, onProgress ProgressFunc) (ScanResult, error) {
+	startedAt := time.Now()
+	options = normalizeScanOptions(options)
 	normalizedDirectories := uniqueDirectories(directories)
 	files := make([]FileInfo, 0)
 	skipped := make([]SkippedItem, 0)
+	scannedFileCount := 0
 	emitProgress := createProgressEmitter(onProgress)
+	initialDetail := "共 " + itoa(len(normalizedDirectories)) + " 个目录"
+	if options.HasMinFileSize {
+		initialDetail += "，仅扫描大于 " + itoa64(options.MinFileSize/(1024*1024)) + "M 的文件"
+	}
 
 	emitProgress(Progress{
-		Percent: 0,
-		Stage:   "准备扫描目录",
-		Detail:  "共 " + itoa(len(normalizedDirectories)) + " 个目录",
+		Percent:      0,
+		ScannedFiles: scannedFileCount,
+		Stage:        "准备扫描目录",
+		Detail:       initialDetail,
 	})
 
 	if err := checkCancelled(ctx); err != nil {
@@ -103,20 +118,22 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 		}
 
 		emitProgress(Progress{
-			Percent: percent,
-			Stage:   "正在扫描目录",
-			Detail:  rootDirectory,
+			Percent:      percent,
+			ScannedFiles: scannedFileCount,
+			Stage:        "正在扫描目录",
+			Detail:       rootDirectory,
 		})
 
-		if err := walkDirectory(ctx, rootDirectory, rootDirectory, &files, &skipped); err != nil {
+		if err := walkDirectory(ctx, rootDirectory, rootDirectory, options, &files, &skipped, &scannedFileCount, percent, emitProgress); err != nil {
 			return ScanResult{}, err
 		}
 	}
 
 	emitProgress(Progress{
-		Percent: 45,
-		Stage:   "正在筛选待比对文件",
-		Detail:  "已扫描 " + itoa(len(files)) + " 个文件",
+		Percent:      45,
+		ScannedFiles: scannedFileCount,
+		Stage:        "正在筛选待比对文件",
+		Detail:       "已扫描 " + itoa(len(files)) + " 个文件",
 	})
 
 	if err := checkCancelled(ctx); err != nil {
@@ -141,9 +158,10 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 	}
 
 	emitProgress(Progress{
-		Percent: 55,
-		Stage:   "正在快速比对文件特征",
-		Detail:  "待比对 " + itoa(len(candidateFiles)) + " 个文件",
+		Percent:      55,
+		ScannedFiles: scannedFileCount,
+		Stage:        "正在快速比对文件特征",
+		Detail:       "待比对 " + itoa(len(candidateFiles)) + " 个文件",
 	})
 
 	sampledCandidates, sampleSkipped, err := filterCandidatesBySampleWithContext(ctx, candidateFiles, emitProgress)
@@ -153,9 +171,10 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 	skipped = append(skipped, sampleSkipped...)
 
 	emitProgress(Progress{
-		Percent: 72,
-		Stage:   "正在校验文件内容",
-		Detail:  "待校验 " + itoa(len(sampledCandidates)) + " 个文件",
+		Percent:      72,
+		ScannedFiles: scannedFileCount,
+		Stage:        "正在校验文件内容",
+		Detail:       "待校验 " + itoa(len(sampledCandidates)) + " 个文件",
 	})
 
 	hashedFiles, hashSkipped, err := hashCandidatesWithContext(ctx, sampledCandidates, emitProgress)
@@ -169,9 +188,10 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 	}
 
 	emitProgress(Progress{
-		Percent: 92,
-		Stage:   "正在整理重复结果",
-		Detail:  "已完成内容校验",
+		Percent:      92,
+		ScannedFiles: scannedFileCount,
+		Stage:        "正在整理重复结果",
+		Detail:       "已完成内容校验",
 	})
 
 	exactMap := make(map[string][]FileInfo)
@@ -218,9 +238,10 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 	})
 
 	emitProgress(Progress{
-		Percent: 100,
-		Stage:   "扫描完成",
-		Detail:  "找到 " + itoa(len(groups)) + " 组重复文件",
+		Percent:      100,
+		ScannedFiles: scannedFileCount,
+		Stage:        "扫描完成",
+		Detail:       "找到 " + itoa(len(groups)) + " 组重复文件",
 	})
 
 	duplicateFiles := 0
@@ -233,18 +254,19 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, onPro
 	return ScanResult{
 		ScannedDirectories: normalizedDirectories,
 		Summary: Summary{
-			TotalFiles:      len(files),
-			CandidateFiles:  len(candidateFiles),
-			DuplicateGroups: len(groups),
-			DuplicateFiles:  duplicateFiles,
-			WastedSize:      wastedSize,
+			ScanDurationSeconds: int64(time.Since(startedAt) / time.Second),
+			TotalFiles:          len(files),
+			CandidateFiles:      len(candidateFiles),
+			DuplicateGroups:     len(groups),
+			DuplicateFiles:      duplicateFiles,
+			WastedSize:          wastedSize,
 		},
 		Groups:  groups,
 		Skipped: skipped,
 	}, nil
 }
 
-func walkDirectory(ctx context.Context, directory string, rootDirectory string, files *[]FileInfo, skipped *[]SkippedItem) error {
+func walkDirectory(ctx context.Context, directory string, rootDirectory string, options ScanOptions, files *[]FileInfo, skipped *[]SkippedItem, scannedFileCount *int, scanPercent int, emitProgress ProgressFunc) error {
 	if err := checkCancelled(ctx); err != nil {
 		return err
 	}
@@ -274,7 +296,7 @@ func walkDirectory(ctx context.Context, directory string, rootDirectory string, 
 		}
 
 		if entry.IsDir() {
-			if err := walkDirectory(ctx, fullPath, rootDirectory, files, skipped); err != nil {
+			if err := walkDirectory(ctx, fullPath, rootDirectory, options, files, skipped, scannedFileCount, scanPercent, emitProgress); err != nil {
 				return err
 			}
 			continue
@@ -290,6 +312,10 @@ func walkDirectory(ctx context.Context, directory string, rootDirectory string, 
 				Path:   fullPath,
 				Reason: "无法读取文件信息：" + err.Error(),
 			})
+			continue
+		}
+
+		if options.HasMinFileSize && info.Size() <= options.MinFileSize {
 			continue
 		}
 
@@ -312,9 +338,33 @@ func walkDirectory(ctx context.Context, directory string, rootDirectory string, 
 			ModifiedAt:    info.ModTime().Format(time.RFC3339),
 			ModifiedAtMs:  info.ModTime().UnixMilli(),
 		})
+		*scannedFileCount += 1
+
+		emitProgress(Progress{
+			Percent:      scanPercent,
+			ScannedFiles: *scannedFileCount,
+			Stage:        "正在扫描目录",
+			Detail:       rootDirectory,
+		})
 	}
 
 	return nil
+}
+
+func normalizeScanOptions(options ScanOptions) ScanOptions {
+	if options.MinFileSize < 0 {
+		options.MinFileSize = 0
+	}
+
+	if options.HasMinFileSize && options.MinFileSize == 0 {
+		return options
+	}
+
+	if options.MinFileSize == 0 {
+		options.HasMinFileSize = false
+	}
+
+	return options
 }
 
 func uniqueDirectories(directories []string) []string {
@@ -665,6 +715,7 @@ func compareFilesByModifiedAtDesc(left FileInfo, right FileInfo) bool {
 
 func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 	lastPercent := -1
+	lastScannedFiles := -1
 	lastStage := ""
 	lastDetail := ""
 	lastEmittedAt := time.Time{}
@@ -688,6 +739,8 @@ func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 			shouldEmit = true
 		} else if progress.Stage != lastStage {
 			shouldEmit = true
+		} else if progress.ScannedFiles != lastScannedFiles && now.Sub(lastEmittedAt) >= 200*time.Millisecond {
+			shouldEmit = true
 		} else if progress.Percent != lastPercent && now.Sub(lastEmittedAt) >= 250*time.Millisecond {
 			shouldEmit = true
 		} else if progress.Detail != lastDetail && now.Sub(lastEmittedAt) >= 200*time.Millisecond {
@@ -699,6 +752,7 @@ func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 		}
 
 		lastPercent = progress.Percent
+		lastScannedFiles = progress.ScannedFiles
 		lastStage = progress.Stage
 		lastDetail = progress.Detail
 		lastEmittedAt = now

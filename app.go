@@ -146,8 +146,8 @@ func (app *DesktopApp) BridgeScript() string {
 			selectDirectories: function () {
 				return selectDirectories();
 			},
-			scanDirectories: function (directories) {
-				return startScanDirectories(directories).then(function (scanId) {
+                        scanDirectories: function (directories, minSizeMBText) {
+                                return startScanDirectories(directories, minSizeMBText || "").then(function (scanId) {
                                         window.__duplicateFinderActiveScanId = scanId;
 					return new Promise(function (resolve, reject) {
 						function handleStatus(status) {
@@ -364,19 +364,29 @@ func (app *DesktopApp) Shutdown() error {
 	return app.server.Shutdown(context.Background())
 }
 
-func (app *DesktopApp) ScanDirectories(directories []string) (scanner.ScanResult, error) {
+func (app *DesktopApp) ScanDirectories(directories []string, minSizeMBText string) (scanner.ScanResult, error) {
 	if len(directories) == 0 {
 		return scanner.ScanResult{}, errors.New("请先选择至少一个目录。")
 	}
 
-	return scanner.ScanDirectoriesWithContext(context.Background(), directories, func(progress scanner.Progress) {
+	scanOptions, err := parseScanOptions(minSizeMBText)
+	if err != nil {
+		return scanner.ScanResult{}, err
+	}
+
+	return scanner.ScanDirectoriesWithContext(context.Background(), directories, scanOptions, func(progress scanner.Progress) {
 		app.emitProgress(progress)
 	})
 }
 
-func (app *DesktopApp) StartScanDirectories(directories []string) (string, error) {
+func (app *DesktopApp) StartScanDirectories(directories []string, minSizeMBText string) (string, error) {
 	if len(directories) == 0 {
 		return "", errors.New("请先选择至少一个目录。")
+	}
+
+	scanOptions, err := parseScanOptions(minSizeMBText)
+	if err != nil {
+		return "", err
 	}
 
 	scanID := strconv.FormatUint(atomic.AddUint64(&app.nextScan, 1), 10)
@@ -396,13 +406,35 @@ func (app *DesktopApp) StartScanDirectories(directories []string) (string, error
 	app.scanMu.Unlock()
 
 	go func() {
-		result, err := scanner.ScanDirectoriesWithContext(ctx, directories, func(progress scanner.Progress) {
+		result, err := scanner.ScanDirectoriesWithContext(ctx, directories, scanOptions, func(progress scanner.Progress) {
 			app.updateScanProgress(scanID, progress)
 		})
 		app.finishScan(scanID, result, err)
 	}()
 
 	return scanID, nil
+}
+
+func parseScanOptions(minSizeMBText string) (scanner.ScanOptions, error) {
+	normalizedText := strings.TrimSpace(minSizeMBText)
+	if normalizedText == "" {
+		return scanner.ScanOptions{}, nil
+	}
+
+	minSizeMB, err := strconv.ParseInt(normalizedText, 10, 64)
+	if err != nil {
+		return scanner.ScanOptions{}, errors.New("扫描条件只支持输入纯数字，单位为 M。")
+	}
+
+	const bytesPerMegabyte int64 = 1024 * 1024
+	if minSizeMB > (1<<63-1)/bytesPerMegabyte {
+		return scanner.ScanOptions{}, errors.New("扫描条件过大，请输入更小的数字。")
+	}
+
+	return scanner.ScanOptions{
+		HasMinFileSize: true,
+		MinFileSize:    minSizeMB * bytesPerMegabyte,
+	}, nil
 }
 
 func (app *DesktopApp) GetScanStatus(scanID string) (ScanTaskStatus, error) {

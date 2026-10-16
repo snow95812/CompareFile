@@ -13,6 +13,7 @@ body {
   margin: 0;
   height: 100vh;
   overflow: hidden;
+  font-size: 13px;
   background: linear-gradient(180deg, #f7f9fd 0%, #eef3fb 100%);
 }
 
@@ -64,7 +65,7 @@ button {
 }
 
 .panel h1 {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .title-row {
@@ -122,11 +123,11 @@ button {
 }
 
 .panel h2 {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .panel h3 {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .panel-header,
@@ -161,13 +162,62 @@ button {
 .muted {
   color: #62708a;
   line-height: 1.6;
-  font-size:13px;padding:12px 0;
+  font-size: 12px;
+  padding: 12px 0;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.scan-conditions {
+  margin: 2px 0 6px;
+}
+
+.scan-condition-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scan-condition-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 134px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.scan-condition-input {
+  width: 84px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #20304d;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.scan-condition-input::placeholder {
+  color: #8b96aa;
+}
+
+.scan-condition-input:disabled,
+.scan-condition-input:disabled + .scan-condition-unit {
+  color: #8b96aa;
+}
+
+.scan-condition-unit {
+  color: #62708a;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .button {
@@ -292,7 +342,7 @@ button {
 .skipped-path {
   word-break: break-all;
   color: #20304d;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .remove-button {
@@ -317,7 +367,7 @@ button {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -330,7 +380,7 @@ button {
 
 .summary-card strong {
   display: block;
-  font-size: 24px;
+  font-size: 14px;
   margin-top: 8px;
 }
 
@@ -416,7 +466,7 @@ button {
 .progress-modal-stage {
   margin-top: 12px;
   color: #20304d;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -434,7 +484,7 @@ button {
 
 .summary-label {
   color: #60708d;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .result-toolbar {
@@ -600,6 +650,7 @@ button {
 .result-group-title p {
   color: #64748d;
   margin-top: 4px;
+  font-size: 12px;
 }
 
 .result-row {
@@ -682,7 +733,7 @@ button {
   display: block;
   font-weight: 600;
   color: #172033;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.35;
 }
 
@@ -792,8 +843,12 @@ button {
   margin: 0;
   padding: 12px 0;
   line-height: 1.5;
-  font-size: 13px;
+  font-size: 12px;
   color: #31425e;
+}
+
+.empty-state {
+  font-size: 12px;
 }
 
 .tips li + li {

@@ -42,6 +42,24 @@
             选择多个目录后，先按文件大小预筛，再用文件特征和 SHA-256 校验内容，找出完全相同的文件。
           </p>
 
+          <div class="scan-conditions">
+            <label class="scan-condition-field" for="minScanSizeInput">
+              <span class="filter-label">仅扫描大于</span>
+              <div class="scan-condition-input-wrap">
+                <input
+                  id="minScanSizeInput"
+                  class="scan-condition-input"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  placeholder="留空不限"
+                  aria-label="仅扫描大于多少 M 的文件"
+                />
+                <span class="scan-condition-unit">M的文件</span>
+              </div>
+            </label>
+          </div>
+
           <div class="actions">
             <button id="selectDirectoriesButton" class="button button-primary">选择目录</button>
             <button id="scanButton" class="button button-secondary" disabled>开始扫描</button>
@@ -85,6 +103,10 @@
           </div>
 
           <div id="summaryGrid" class="summary-grid">
+            <div class="summary-card">
+              <span class="summary-label">扫描用时</span>
+              <strong id="scanDurationValue">00:00:00</strong>
+            </div>
             <div class="summary-card">
               <span class="summary-label">扫描文件数</span>
               <strong id="totalFilesValue">0</strong>
@@ -136,7 +158,11 @@
                 <option value="3-4">3-4M</option>
                 <option value="4-5">4-5M</option>
                 <option value="5-10">5-10M</option>
-                <option value="10+">10M以上</option>
+                <option value="10-15">10-15M</option>
+                <option value="15-30">15-30M</option>
+                <option value="30-50">30-50M</option>
+                <option value="50-100">50-100M</option>
+                <option value="100+">100M以上</option>
               </select>
             </label>
           </div>

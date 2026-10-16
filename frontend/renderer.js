@@ -13,6 +13,7 @@ const state = {
   },
   scanProgress: {
     percent: 0,
+    scannedFiles: 0,
     stage: '未扫描',
     detail: '',
   },
@@ -23,6 +24,8 @@ const state = {
     stage: '未删除',
     detail: '',
   },
+  lastScanMinSizeMBText: '',
+  scanStartedAtMs: 0,
   thumbnailVersion: 0,
   resultView: {
     revision: 0,
@@ -41,6 +44,7 @@ const elements = {
   selectDirectoriesButton: document.getElementById('selectDirectoriesButton'),
   scanButton: document.getElementById('scanButton'),
   cancelScanButton: document.getElementById('cancelScanButton'),
+  minScanSizeInput: document.getElementById('minScanSizeInput'),
   clearButton: document.getElementById('clearButton'),
   selectAllButton: document.getElementById('selectAllButton'),
   invertSelectButton: document.getElementById('invertSelectButton'),
@@ -65,6 +69,7 @@ const elements = {
   deleteProgressPercent: document.getElementById('deleteProgressPercent'),
   deleteProgressBar: document.getElementById('deleteProgressBar'),
   deleteProgressDetail: document.getElementById('deleteProgressDetail'),
+  scanDurationValue: document.getElementById('scanDurationValue'),
   totalFilesValue: document.getElementById('totalFilesValue'),
   candidateFilesValue: document.getElementById('candidateFilesValue'),
   duplicateGroupsValue: document.getElementById('duplicateGroupsValue'),
@@ -86,10 +91,12 @@ const RESULT_ITEM_ESTIMATED_HEIGHTS = {
   file: 86,
   tip: 30,
 };
+let scanDurationTimerId = 0;
 
 elements.selectDirectoriesButton.addEventListener('click', handleSelectDirectories);
 elements.scanButton.addEventListener('click', handleScan);
 elements.cancelScanButton.addEventListener('click', handleCancelScan);
+elements.minScanSizeInput.addEventListener('input', handleMinScanSizeInput);
 elements.clearButton.addEventListener('click', handleClearDirectories);
 elements.selectAllButton.addEventListener('click', handleSelectAllFiles);
 elements.invertSelectButton.addEventListener('click', handleInvertSelectedFiles);
@@ -116,10 +123,12 @@ if (
   window.duplicateFinderAPI.onScanProgress((progress) => {
     state.scanProgress = {
       percent: progress.percent || 0,
+      scannedFiles: Number.isFinite(progress.scannedFiles) ? progress.scannedFiles : state.scanProgress.scannedFiles || 0,
       stage: progress.stage || '处理中',
       detail: progress.detail || '',
     };
     renderScanProgress();
+    renderSummary();
   });
 }
 
@@ -189,21 +198,36 @@ async function handleScan() {
     return;
   }
 
+  const minScanSizeMBText = getNormalizedMinScanSizeInputValue();
+  if (elements.minScanSizeInput.value !== minScanSizeMBText) {
+    elements.minScanSizeInput.value = minScanSizeMBText;
+  }
+
+  if (minScanSizeMBText !== '' && !/^\d+$/.test(minScanSizeMBText)) {
+    window.alert('扫描条件只支持输入纯数字，单位为 M。');
+    elements.minScanSizeInput.focus();
+    return;
+  }
+
   state.isScanning = true;
   state.isCancellingScan = false;
+  state.scanStartedAtMs = Date.now();
+  state.lastScanMinSizeMBText = minScanSizeMBText;
   state.scanResult = null;
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
   invalidateResultCaches({ clearHeights: true });
   state.scanProgress = {
     percent: 0,
+    scannedFiles: 0,
     stage: '准备扫描目录',
     detail: '',
   };
+  startScanDurationTicker();
   render();
 
   try {
-    state.scanResult = await window.duplicateFinderAPI.scanDirectories(state.directories);
+    state.scanResult = await window.duplicateFinderAPI.scanDirectories(state.directories, minScanSizeMBText);
     invalidateResultCaches({ clearHeights: true });
   } catch (error) {
     state.scanResult = {
@@ -213,7 +237,15 @@ async function handleScan() {
   } finally {
     state.isScanning = false;
     state.isCancellingScan = false;
+    stopScanDurationTicker();
     render();
+  }
+}
+
+function handleMinScanSizeInput(event) {
+  const sanitizedValue = String(event.target.value || '').replace(/\D+/g, '');
+  if (event.target.value !== sanitizedValue) {
+    event.target.value = sanitizedValue;
   }
 }
 
@@ -274,6 +306,14 @@ function handleClearDirectories() {
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
   invalidateResultCaches({ clearHeights: true });
+  state.scanProgress = {
+    percent: 0,
+    scannedFiles: 0,
+    stage: '未扫描',
+    detail: '',
+  };
+  state.scanStartedAtMs = 0;
+  stopScanDurationTicker();
   render();
 }
 
@@ -283,6 +323,14 @@ function handleRemoveDirectory(directory) {
   state.selectedFiles = new Set();
   state.collapsedGroups = new Set();
   invalidateResultCaches({ clearHeights: true });
+  state.scanProgress = {
+    percent: 0,
+    scannedFiles: 0,
+    stage: '未扫描',
+    detail: '',
+  };
+  state.scanStartedAtMs = 0;
+  stopScanDurationTicker();
   render();
 }
 
@@ -305,9 +353,12 @@ function addDirectories(directories) {
   invalidateResultCaches({ clearHeights: true });
   state.scanProgress = {
     percent: 0,
+    scannedFiles: 0,
     stage: '未扫描',
     detail: '',
   };
+  state.scanStartedAtMs = 0;
+  stopScanDurationTicker();
   render();
 }
 
@@ -553,7 +604,10 @@ function renderScanState() {
 
   if (state.scanResult) {
     const { summary } = state.scanResult;
-    elements.statusText.textContent = `已扫描 ${summary.totalFiles} 个文件，找到 ${summary.duplicateGroups} 组完全相同的文件。`;
+    const minSizeLabel = getAppliedMinScanSizeLabel();
+    elements.statusText.textContent = minSizeLabel
+      ? `已扫描 ${summary.totalFiles} 个大于 ${minSizeLabel} 的文件，找到 ${summary.duplicateGroups} 组完全相同的文件。`
+      : `已扫描 ${summary.totalFiles} 个文件，找到 ${summary.duplicateGroups} 组完全相同的文件。`;
     elements.scanState.textContent = '已完成';
     elements.scanState.className = 'scan-state done';
     return;
@@ -602,7 +656,12 @@ function renderDeleteProgressModal() {
 function renderSummary() {
   const summary = state.scanResult ? state.scanResult.summary : null;
 
-  elements.totalFilesValue.textContent = summary ? formatNumber(summary.totalFiles) : '0';
+  elements.scanDurationValue.textContent = state.isScanning
+    ? formatDuration(getLiveScanDurationSeconds())
+    : (summary ? formatDuration(summary.scanDurationSeconds) : '00:00:00');
+  elements.totalFilesValue.textContent = state.isScanning
+    ? formatNumber(state.scanProgress.scannedFiles || 0)
+    : (summary ? formatNumber(summary.totalFiles) : '0');
   elements.candidateFilesValue.textContent = summary ? formatNumber(summary.candidateFiles) : '0';
   elements.duplicateGroupsValue.textContent = summary ? formatNumber(summary.duplicateGroups) : '0';
   elements.wastedSizeValue.textContent = summary ? formatBytes(summary.wastedSize) : '0 B';
@@ -717,7 +776,6 @@ function renderFileThumbnail(file) {
         class="thumbnail-image"
         src="${escapeAttribute(toThumbnailUrl(file.path, 100))}"
         alt="${escapeAttribute(file.name)}"
-        loading="lazy"
       />
     `;
   }
@@ -912,6 +970,7 @@ function updateButtons() {
   elements.fileTypeFilter.disabled = !hasScanGroups || isBusy;
   elements.fileSizeFilter.disabled = !hasScanGroups || isBusy;
   elements.cancelDeleteButton.disabled = !state.isDeleting || state.isCancellingDelete;
+  elements.minScanSizeInput.disabled = isBusy;
 }
 
 function renderFileTypeFilterOptions() {
@@ -964,6 +1023,7 @@ function filterDeletedFilesFromGroups(groups, deletedPaths) {
 
 function buildSummaryFromGroups(previousSummary, groups, deletedCount) {
   return {
+    scanDurationSeconds: ((previousSummary && previousSummary.scanDurationSeconds) || 0),
     totalFiles: Math.max(((previousSummary && previousSummary.totalFiles) || 0) - deletedCount, 0),
     candidateFiles: Math.max(((previousSummary && previousSummary.candidateFiles) || 0) - deletedCount, 0),
     duplicateGroups: groups.length,
@@ -1079,7 +1139,23 @@ function getSizeRangeKey(size) {
     return '5-10';
   }
 
-  return '10+';
+  if (size < megaByte * 15) {
+    return '10-15';
+  }
+
+  if (size < megaByte * 30) {
+    return '15-30';
+  }
+
+  if (size < megaByte * 50) {
+    return '30-50';
+  }
+
+  if (size < megaByte * 100) {
+    return '50-100';
+  }
+
+  return '100+';
 }
 
 function formatBytes(bytes) {
@@ -1116,6 +1192,46 @@ function formatDateTime(value) {
     minute: '2-digit',
     second: '2-digit',
   }).format(new Date(value));
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+
+  return [hours, minutes, remainingSeconds]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':');
+}
+
+function getLiveScanDurationSeconds() {
+  if (!state.scanStartedAtMs) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - state.scanStartedAtMs) / 1000));
+}
+
+function startScanDurationTicker() {
+  stopScanDurationTicker();
+  scanDurationTimerId = window.setInterval(() => {
+    if (!state.isScanning) {
+      stopScanDurationTicker();
+      return;
+    }
+
+    renderSummary();
+  }, 1000);
+}
+
+function stopScanDurationTicker() {
+  if (!scanDurationTimerId) {
+    return;
+  }
+
+  window.clearInterval(scanDurationTimerId);
+  scanDurationTimerId = 0;
 }
 
 function isImageFile(extension) {
@@ -1184,6 +1300,18 @@ function waitForNextFrame() {
   return new Promise((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+}
+
+function getNormalizedMinScanSizeInputValue() {
+  if (!elements.minScanSizeInput) {
+    return '';
+  }
+
+  return String(elements.minScanSizeInput.value || '').trim().replace(/\D+/g, '');
+}
+
+function getAppliedMinScanSizeLabel() {
+  return state.lastScanMinSizeMBText ? `${state.lastScanMinSizeMBText}M` : '';
 }
 
 function invalidateResultCaches(options = {}) {
