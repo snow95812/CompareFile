@@ -82,6 +82,11 @@ type ScanTaskStatus struct {
 	Error    string              `json:"error,omitempty"`
 }
 
+type ScanTaskEvent struct {
+	ScanID string `json:"scanId"`
+	ScanTaskStatus
+}
+
 type deleteTask struct {
 	progress scanner.Progress
 	done     bool
@@ -95,6 +100,11 @@ type DeleteTaskStatus struct {
 	Done     bool             `json:"done"`
 	Result   *DeleteResult    `json:"result,omitempty"`
 	Error    string           `json:"error,omitempty"`
+}
+
+type DeleteTaskEvent struct {
+	DeleteID string `json:"deleteId"`
+	DeleteTaskStatus
 }
 
 func NewDesktopApp() *DesktopApp {
@@ -118,6 +128,8 @@ func (app *DesktopApp) BridgeScript() string {
 	return `
 		window.__duplicateFinderProgressListeners = [];
                 window.__duplicateFinderDeleteProgressListeners = [];
+                window.__duplicateFinderScanTaskListeners = [];
+                window.__duplicateFinderDeleteTaskListeners = [];
                 window.__duplicateFinderActiveScanId = null;
                 window.__duplicateFinderActiveDeleteId = null;
 		window.__duplicateFinderEmitProgress = function (progress) {
@@ -138,6 +150,24 @@ func (app *DesktopApp) BridgeScript() string {
 				}
 			});
 		};
+                window.__duplicateFinderEmitScanTaskStatus = function (status) {
+                        window.__duplicateFinderScanTaskListeners.forEach(function (listener) {
+                                try {
+                                        listener(status);
+                                } catch (error) {
+                                        console.error(error);
+                                }
+                        });
+                };
+                window.__duplicateFinderEmitDeleteTaskStatus = function (status) {
+                        window.__duplicateFinderDeleteTaskListeners.forEach(function (listener) {
+                                try {
+                                        listener(status);
+                                } catch (error) {
+                                        console.error(error);
+                                }
+                        });
+                };
 
 		window.duplicateFinderAPI = {
 			getAppVersion: function () {
@@ -150,39 +180,45 @@ func (app *DesktopApp) BridgeScript() string {
                                 return startScanDirectories(directories, minSizeMBText || "").then(function (scanId) {
                                         window.__duplicateFinderActiveScanId = scanId;
 					return new Promise(function (resolve, reject) {
-						function handleStatus(status) {
-							if (status && status.progress) {
-								window.__duplicateFinderEmitProgress(status.progress);
-							}
+                                                var unsubscribe = window.duplicateFinderAPI.onScanTaskStatus(function (status) {
+                                                        if (!status || status.scanId !== scanId) {
+                                                                return;
+                                                        }
 
+                                                        handleStatus(status);
+                                                });
+
+                                                function cleanup() {
+                                                        if (unsubscribe) {
+                                                                unsubscribe();
+                                                                unsubscribe = null;
+                                                        }
+
+                                                        window.__duplicateFinderActiveScanId = null;
+                                                }
+
+						function handleStatus(status) {
 							if (!status || !status.done) {
 								return false;
 							}
 
 							if (status.error) {
-                                                                window.__duplicateFinderActiveScanId = null;
+                                                                cleanup();
 								reject(new Error(status.error));
 								return true;
 							}
 
-                                                        window.__duplicateFinderActiveScanId = null;
+                                                        cleanup();
 							resolve(status.result || null);
 							return true;
 						}
 
-						function poll() {
-							getScanStatus(scanId).then(function (status) {
-								if (handleStatus(status)) {
-										return;
-								}
-
-								window.setTimeout(poll, 250);
-							}).catch(function (error) {
-									reject(error);
-							});
-						}
-
-						poll();
+                                                getScanStatus(scanId).then(function (status) {
+                                                        handleStatus(status ? Object.assign({ scanId: scanId }, status) : status);
+                                                }).catch(function (error) {
+                                                        cleanup();
+                                                        reject(error);
+                                                });
 					});
 				});
 			},
@@ -197,39 +233,45 @@ func (app *DesktopApp) BridgeScript() string {
 				return startDeleteFiles(filePaths).then(function (deleteId) {
                                         window.__duplicateFinderActiveDeleteId = deleteId;
 					return new Promise(function (resolve, reject) {
-						function handleStatus(status) {
-							if (status && status.progress) {
-								window.__duplicateFinderEmitDeleteProgress(status.progress);
-							}
+                                                var unsubscribe = window.duplicateFinderAPI.onDeleteTaskStatus(function (status) {
+                                                        if (!status || status.deleteId !== deleteId) {
+                                                                return;
+                                                        }
 
+                                                        handleStatus(status);
+                                                });
+
+                                                function cleanup() {
+                                                        if (unsubscribe) {
+                                                                unsubscribe();
+                                                                unsubscribe = null;
+                                                        }
+
+                                                        window.__duplicateFinderActiveDeleteId = null;
+                                                }
+
+						function handleStatus(status) {
 							if (!status || !status.done) {
 								return false;
 							}
 
 							if (status.error) {
-                                                                window.__duplicateFinderActiveDeleteId = null;
+                                                                cleanup();
 								reject(new Error(status.error));
 								return true;
 							}
 
-                                                        window.__duplicateFinderActiveDeleteId = null;
+                                                        cleanup();
 							resolve(status.result || null);
 							return true;
 						}
 
-						function poll() {
-							getDeleteStatus(deleteId).then(function (status) {
-								if (handleStatus(status)) {
-									return;
-								}
-
-								window.setTimeout(poll, 150);
-							}).catch(function (error) {
-								reject(error);
-							});
-						}
-
-						poll();
+                                                getDeleteStatus(deleteId).then(function (status) {
+                                                        handleStatus(status ? Object.assign({ deleteId: deleteId }, status) : status);
+                                                }).catch(function (error) {
+                                                        cleanup();
+                                                        reject(error);
+                                                });
 					});
 				});
 			},
@@ -263,6 +305,24 @@ func (app *DesktopApp) BridgeScript() string {
                                 return function () {
                                         window.__duplicateFinderDeleteProgressListeners =
                                                 window.__duplicateFinderDeleteProgressListeners.filter(function (item) {
+                                                        return item !== callback;
+                                                });
+                                };
+                        },
+                        onScanTaskStatus: function (callback) {
+                                window.__duplicateFinderScanTaskListeners.push(callback);
+                                return function () {
+                                        window.__duplicateFinderScanTaskListeners =
+                                                window.__duplicateFinderScanTaskListeners.filter(function (item) {
+                                                        return item !== callback;
+                                                });
+                                };
+                        },
+                        onDeleteTaskStatus: function (callback) {
+                                window.__duplicateFinderDeleteTaskListeners.push(callback);
+                                return function () {
+                                        window.__duplicateFinderDeleteTaskListeners =
+                                                window.__duplicateFinderDeleteTaskListeners.filter(function (item) {
                                                         return item !== callback;
                                                 });
                                 };
@@ -405,6 +465,8 @@ func (app *DesktopApp) StartScanDirectories(directories []string, minSizeMBText 
 	}
 	app.scanMu.Unlock()
 
+	app.emitProgress(initialProgress)
+
 	go func() {
 		result, err := scanner.ScanDirectoriesWithContext(ctx, directories, scanOptions, func(progress scanner.Progress) {
 			app.updateScanProgress(scanID, progress)
@@ -461,13 +523,13 @@ func (app *DesktopApp) GetScanStatus(scanID string) (ScanTaskStatus, error) {
 
 func (app *DesktopApp) CancelScan(scanID string) (bool, error) {
 	app.scanMu.Lock()
-	defer app.scanMu.Unlock()
-
 	task, exists := app.scans[scanID]
 	if !exists {
+		app.scanMu.Unlock()
 		return false, errors.New("扫描任务不存在。")
 	}
 	if task.done || task.cancel == nil {
+		app.scanMu.Unlock()
 		return false, nil
 	}
 
@@ -478,6 +540,10 @@ func (app *DesktopApp) CancelScan(scanID string) (bool, error) {
 	}
 	task.cancel()
 	task.cancel = nil
+	progress := task.progress
+	app.scanMu.Unlock()
+
+	app.emitProgress(progress)
 	return true, nil
 }
 
@@ -529,6 +595,8 @@ func (app *DesktopApp) StartDeleteFiles(filePaths []string) (string, error) {
 	}
 	app.deleteMu.Unlock()
 
+	app.emitDeleteProgress(initialProgress)
+
 	go func() {
 		result, err := app.runDeleteFiles(ctx, filePaths, func(progress scanner.Progress) {
 			app.updateDeleteProgress(deleteID, progress)
@@ -563,13 +631,13 @@ func (app *DesktopApp) GetDeleteStatus(deleteID string) (DeleteTaskStatus, error
 
 func (app *DesktopApp) CancelDelete(deleteID string) (bool, error) {
 	app.deleteMu.Lock()
-	defer app.deleteMu.Unlock()
-
 	task, exists := app.deletes[deleteID]
 	if !exists {
+		app.deleteMu.Unlock()
 		return false, errors.New("删除任务不存在。")
 	}
 	if task.done || task.cancel == nil {
+		app.deleteMu.Unlock()
 		return false, nil
 	}
 
@@ -582,6 +650,10 @@ func (app *DesktopApp) CancelDelete(deleteID string) (bool, error) {
 	}
 	task.cancel()
 	task.cancel = nil
+	progress := task.progress
+	app.deleteMu.Unlock()
+
+	app.emitDeleteProgress(progress)
 	return true, nil
 }
 
@@ -601,24 +673,79 @@ func (app *DesktopApp) emitProgress(progress scanner.Progress) {
 	})
 }
 
+func (app *DesktopApp) emitDeleteProgress(progress scanner.Progress) {
+	if app.webView == nil {
+		return
+	}
+
+	payload, err := json.Marshal(progress)
+	if err != nil {
+		return
+	}
+
+	script := "window.__duplicateFinderEmitDeleteProgress && window.__duplicateFinderEmitDeleteProgress(" + string(payload) + ");"
+	app.webView.Dispatch(func() {
+		app.webView.Eval(script)
+	})
+}
+
+func (app *DesktopApp) emitScanTaskStatus(scanID string, status ScanTaskStatus) {
+	if app.webView == nil {
+		return
+	}
+
+	payload, err := json.Marshal(ScanTaskEvent{
+		ScanID:         scanID,
+		ScanTaskStatus: status,
+	})
+	if err != nil {
+		return
+	}
+
+	script := "window.__duplicateFinderEmitScanTaskStatus && window.__duplicateFinderEmitScanTaskStatus(" + string(payload) + ");"
+	app.webView.Dispatch(func() {
+		app.webView.Eval(script)
+	})
+}
+
+func (app *DesktopApp) emitDeleteTaskStatus(deleteID string, status DeleteTaskStatus) {
+	if app.webView == nil {
+		return
+	}
+
+	payload, err := json.Marshal(DeleteTaskEvent{
+		DeleteID:         deleteID,
+		DeleteTaskStatus: status,
+	})
+	if err != nil {
+		return
+	}
+
+	script := "window.__duplicateFinderEmitDeleteTaskStatus && window.__duplicateFinderEmitDeleteTaskStatus(" + string(payload) + ");"
+	app.webView.Dispatch(func() {
+		app.webView.Eval(script)
+	})
+}
+
 func (app *DesktopApp) updateScanProgress(scanID string, progress scanner.Progress) {
 	app.scanMu.Lock()
-	defer app.scanMu.Unlock()
-
 	task, exists := app.scans[scanID]
 	if !exists {
+		app.scanMu.Unlock()
 		return
 	}
 
 	task.progress = progress
+	app.scanMu.Unlock()
+
+	app.emitProgress(progress)
 }
 
 func (app *DesktopApp) finishScan(scanID string, result scanner.ScanResult, err error) {
 	app.scanMu.Lock()
-	defer app.scanMu.Unlock()
-
 	task, exists := app.scans[scanID]
 	if !exists {
+		app.scanMu.Unlock()
 		return
 	}
 
@@ -631,6 +758,14 @@ func (app *DesktopApp) finishScan(scanID string, result scanner.ScanResult, err 
 			Detail:  "用户已中止扫描",
 		}
 		task.err = "扫描已中止。"
+		status := ScanTaskStatus{
+			Progress: task.progress,
+			Done:     true,
+			Error:    task.err,
+		}
+		app.scanMu.Unlock()
+		app.emitProgress(status.Progress)
+		app.emitScanTaskStatus(scanID, status)
 		return
 	}
 	if err != nil {
@@ -640,6 +775,14 @@ func (app *DesktopApp) finishScan(scanID string, result scanner.ScanResult, err 
 			Detail:  err.Error(),
 		}
 		task.err = err.Error()
+		status := ScanTaskStatus{
+			Progress: task.progress,
+			Done:     true,
+			Error:    task.err,
+		}
+		app.scanMu.Unlock()
+		app.emitProgress(status.Progress)
+		app.emitScanTaskStatus(scanID, status)
 		return
 	}
 
@@ -650,6 +793,14 @@ func (app *DesktopApp) finishScan(scanID string, result scanner.ScanResult, err 
 	}
 	resultCopy := result
 	task.result = &resultCopy
+	status := ScanTaskStatus{
+		Progress: task.progress,
+		Done:     true,
+		Result:   task.result,
+	}
+	app.scanMu.Unlock()
+	app.emitProgress(status.Progress)
+	app.emitScanTaskStatus(scanID, status)
 }
 
 func (app *DesktopApp) runDeleteFiles(ctx context.Context, filePaths []string, onProgress func(scanner.Progress)) (DeleteResult, error) {
@@ -745,22 +896,23 @@ func (app *DesktopApp) runDeleteFiles(ctx context.Context, filePaths []string, o
 
 func (app *DesktopApp) updateDeleteProgress(deleteID string, progress scanner.Progress) {
 	app.deleteMu.Lock()
-	defer app.deleteMu.Unlock()
-
 	task, exists := app.deletes[deleteID]
 	if !exists {
+		app.deleteMu.Unlock()
 		return
 	}
 
 	task.progress = progress
+	app.deleteMu.Unlock()
+
+	app.emitDeleteProgress(progress)
 }
 
 func (app *DesktopApp) finishDelete(deleteID string, result DeleteResult, err error) {
 	app.deleteMu.Lock()
-	defer app.deleteMu.Unlock()
-
 	task, exists := app.deletes[deleteID]
 	if !exists {
+		app.deleteMu.Unlock()
 		return
 	}
 
@@ -777,6 +929,14 @@ func (app *DesktopApp) finishDelete(deleteID string, result DeleteResult, err er
 		}
 		resultCopy := result
 		task.result = &resultCopy
+		status := DeleteTaskStatus{
+			Progress: task.progress,
+			Done:     true,
+			Result:   task.result,
+		}
+		app.deleteMu.Unlock()
+		app.emitDeleteProgress(status.Progress)
+		app.emitDeleteTaskStatus(deleteID, status)
 		return
 	}
 	if err != nil {
@@ -788,6 +948,14 @@ func (app *DesktopApp) finishDelete(deleteID string, result DeleteResult, err er
 			Detail:  err.Error(),
 		}
 		task.err = err.Error()
+		status := DeleteTaskStatus{
+			Progress: task.progress,
+			Done:     true,
+			Error:    task.err,
+		}
+		app.deleteMu.Unlock()
+		app.emitDeleteProgress(status.Progress)
+		app.emitDeleteTaskStatus(deleteID, status)
 		return
 	}
 
@@ -800,6 +968,14 @@ func (app *DesktopApp) finishDelete(deleteID string, result DeleteResult, err er
 	}
 	resultCopy := result
 	task.result = &resultCopy
+	status := DeleteTaskStatus{
+		Progress: task.progress,
+		Done:     true,
+		Result:   task.result,
+	}
+	app.deleteMu.Unlock()
+	app.emitDeleteProgress(status.Progress)
+	app.emitDeleteTaskStatus(deleteID, status)
 }
 
 func calculateTaskPercent(current int, total int) int {

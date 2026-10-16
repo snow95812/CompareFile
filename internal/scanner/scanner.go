@@ -127,6 +127,13 @@ func ScanDirectoriesWithContext(ctx context.Context, directories []string, optio
 		if err := walkDirectory(ctx, rootDirectory, rootDirectory, options, &files, &skipped, &scannedFileCount, percent, emitProgress); err != nil {
 			return ScanResult{}, err
 		}
+
+		emitProgress(Progress{
+			Percent:      percent,
+			ScannedFiles: scannedFileCount,
+			Stage:        "正在扫描目录",
+			Detail:       rootDirectory,
+		})
 	}
 
 	emitProgress(Progress{
@@ -340,12 +347,14 @@ func walkDirectory(ctx context.Context, directory string, rootDirectory string, 
 		})
 		*scannedFileCount += 1
 
-		emitProgress(Progress{
-			Percent:      scanPercent,
-			ScannedFiles: *scannedFileCount,
-			Stage:        "正在扫描目录",
-			Detail:       rootDirectory,
-		})
+		if shouldEmitScanProgress(*scannedFileCount) {
+			emitProgress(Progress{
+				Percent:      scanPercent,
+				ScannedFiles: *scannedFileCount,
+				Stage:        "正在扫描目录",
+				Detail:       rootDirectory,
+			})
+		}
 	}
 
 	return nil
@@ -420,7 +429,17 @@ func normalizeExtension(fileName string) string {
 	return extension
 }
 
-const fileSampleChunkSize int64 = 256 * 1024
+const (
+	fileSampleChunkSize   int64 = 256 * 1024
+	fileReadBufferSize          = 1024 * 1024
+	scanProgressBatchSize       = 128
+)
+
+var fileReadBufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, fileReadBufferSize)
+	},
+}
 
 type sampleResult struct {
 	file   FileInfo
@@ -439,7 +458,7 @@ func filterCandidatesBySampleWithContext(ctx context.Context, candidateFiles []F
 		return nil, nil, nil
 	}
 
-	results := make(chan sampleResult, len(candidateFiles))
+	results := make(chan sampleResult, calculateWorkBufferSize(len(candidateFiles)))
 	go func() {
 		runFileWorkers(ctx, candidateFiles, func(file FileInfo) {
 			sample, err := sampleFileWithContext(ctx, file.Path, file.Size)
@@ -506,7 +525,7 @@ func hashCandidatesWithContext(ctx context.Context, candidateFiles []FileInfo, e
 		return nil, nil, nil
 	}
 
-	results := make(chan hashResult, len(candidateFiles))
+	results := make(chan hashResult, calculateWorkBufferSize(len(candidateFiles)))
 	go func() {
 		runFileWorkers(ctx, candidateFiles, func(file FileInfo) {
 			hash, err := hashFileWithContext(ctx, file.Path)
@@ -568,7 +587,7 @@ func runFileWorkers(ctx context.Context, files []FileInfo, processor func(FileIn
 	}
 
 	workerCount := calculateFileWorkerCount(len(files))
-	jobs := make(chan FileInfo, len(files))
+	jobs := make(chan FileInfo, calculateWorkBufferSize(len(files)))
 	var workers sync.WaitGroup
 
 	for workerIndex := 0; workerIndex < workerCount; workerIndex++ {
@@ -591,6 +610,22 @@ func runFileWorkers(ctx context.Context, files []FileInfo, processor func(FileIn
 	}
 	close(jobs)
 	workers.Wait()
+}
+
+func calculateWorkBufferSize(fileCount int) int {
+	if fileCount <= 1 {
+		return 1
+	}
+
+	bufferSize := calculateFileWorkerCount(fileCount) * 2
+	if bufferSize < 1 {
+		bufferSize = 1
+	}
+	if bufferSize > fileCount {
+		bufferSize = fileCount
+	}
+
+	return bufferSize
 }
 
 func calculateFileWorkerCount(fileCount int) int {
@@ -658,7 +693,8 @@ func hashFileWithContext(ctx context.Context, filePath string) (string, error) {
 }
 
 func writeReaderBytesWithContext(ctx context.Context, file *os.File, writer io.Writer, limit int64) error {
-	buffer := make([]byte, 1024*1024)
+	buffer := fileReadBufferPool.Get().([]byte)
+	defer fileReadBufferPool.Put(buffer)
 	remaining := limit
 
 	for remaining != 0 {
@@ -758,6 +794,14 @@ func createProgressEmitter(onProgress ProgressFunc) ProgressFunc {
 		lastEmittedAt = now
 		onProgress(progress)
 	}
+}
+
+func shouldEmitScanProgress(scannedFileCount int) bool {
+	if scannedFileCount <= 0 {
+		return false
+	}
+
+	return scannedFileCount%scanProgressBatchSize == 0
 }
 
 func checkCancelled(ctx context.Context) error {
